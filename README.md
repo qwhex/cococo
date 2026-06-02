@@ -1,24 +1,43 @@
-# congnitive-complexity
+# cococo
 
-[![Build Status](https://travis-ci.org/Melevir/cognitive_complexity.svg?branch=master)](https://travis-ci.org/Melevir/cognitive_complexity)
-[![Maintainability](https://api.codeclimate.com/v1/badges/853d47d353e7becc9f09/maintainability)](https://codeclimate.com/github/Melevir/cognitive_complexity/maintainability)
-[![Test Coverage](https://api.codeclimate.com/v1/badges/853d47d353e7becc9f09/test_coverage)](https://codeclimate.com/github/Melevir/cognitive_complexity/test_coverage)
-[![PyPI version](https://badge.fury.io/py/cognitive-complexity.svg)](https://badge.fury.io/py/cognitive-complexity)
-![PyPI - Python Version](https://img.shields.io/pypi/pyversions/cognitive-complexity)
+**co**de **co**gnitive **co**mplexity — a library and CLI to compute the
+cognitive complexity of Python functions.
 
-Library to calculate Python functions cognitive complexity via code.
+This is a fork of [Melevir/cognitive_complexity](https://github.com/Melevir/cognitive_complexity)
+(MIT) that adds a command-line tool, modern-Python construct support, and
+Python 3.10+ packaging. The importable package name is still
+`cognitive_complexity`; the distribution, repo, and CLI are `cococo`.
 
 ## Installation
 
+Not published to PyPI — install from the repository:
+
 ```bash
-pip install cognitive_complexity
+pip install git+https://github.com/qwhex/cococo
+# or, with uv:
+uv pip install git+https://github.com/qwhex/cococo
 ```
+
+This installs the `cococo` command and the importable `cognitive_complexity`
+package.
 
 ## Usage
 
+### Command line
+
+```bash
+cococo src/                  # score every function, worst first
+cococo src/ --max 20         # gate: exit non-zero if any function exceeds 20
+cococo a.py b.py --min 10    # only show functions scoring >= 10
+```
+
+`cococo` scores every module-level function and method; nested functions are
+folded into their enclosing function's score.
+
+### Library
+
 ```python
 >>> import ast
-
 >>> funcdef = ast.parse("""
 ... def f(a):
 ...     return a * f(a - 1)  # +1 for recursion
@@ -29,26 +48,23 @@ pip install cognitive_complexity
 1
 ```
 
-### Command line: `cococo`
+## What's different from upstream
 
-The package installs a `cococo` command (**co**de **co**gnitive **co**mplexity)
-that scores every function in the given files/directories, worst first:
+This fork diverges from `Melevir/cognitive_complexity` 1.3.0:
 
-```bash
-cococo src/                  # list every function, worst first
-cococo src/ --max 20         # gate: exit non-zero if any function exceeds 20
-cococo a.py b.py --min 10    # only show functions scoring >= 10
-```
+- **`async for`** is counted as a loop (upstream scored it 0).
+- **`match`/`case`** is counted as a single branching structure plus a nesting
+  level (upstream did not handle it).
+- **comprehension `if` filters** each count as a decision point.
+- **method recursion** (`self.method(...)` / `cls.method(...)`) is detected, not
+  only bare-name recursion.
+- the decorator/closure heuristic is tightened to require the inner function to
+  be returned *by name*.
+- a **`cococo` command-line interface**.
+- **Python 3.10+** only; type hints and packaging modernized.
 
-### Flake8-Cognitive-Complexity Extension
-
-Perhaps the most common way to use this library (especially if you are
-already using the [Flake8 linter](https://flake8.pycqa.org/en/latest/))
-is to use the
-[flake8-cognitive-complexity extension](https://github.com/Melevir/flake8-cognitive-complexity).
-If you run Flake8 with this extension installed, Flake8 will let you know
-if your code is too complex. For more details and documentation, visit the
-[flake8-cognitive-complexity extension repository](https://github.com/Melevir/flake8-cognitive-complexity).
+The core control-flow scoring (Campbell's rules) is unchanged — it is the
+empirically validated part of the metric.
 
 ## What is cognitive complexity
 
@@ -68,27 +84,20 @@ Here are some readings about cognitive complexity:
 
 ## Realization details
 
-This is not precise realization of original algorithm
-proposed by [G. Ann Campbell](https://github.com/ganncamp),
-but it gives rather similar results.
-The algorithm gives complexity points for breaking control flow, nesting,
-recursion, stacks logic operation etc.
+This is not a precise realization of the original algorithm proposed by
+[G. Ann Campbell](https://github.com/ganncamp), but it gives rather similar
+results. The algorithm gives complexity points for breaking control flow,
+nesting, recursion, and stacked logical operations.
 
-## Contributing
+## Development
 
-We would love you to contribute to our project. It's simple:
+```bash
+pip install -r requirements_dev.txt
+just check          # lint + type-check + tests + readme lint
+just test           # tests with coverage
+just bench          # performance benchmark
+```
 
-- Create an issue with bug you found or proposal you have. Wait for
-  approve from maintainer.
-- Create a pull request. Make sure all checks are green.
-- Fix review comments if any.
-- Be awesome.
+## License
 
-Here are useful tips:
-
-- You can run all checks and tests with `just check`. Please do it
-  before CI does.
-- We use [BestDoctor python styleguide](https://github.com/best-doctor/guides/blob/master/guides/python_styleguide.md).
-  Sorry, styleguide is available only in Russian for now.
-- We respect [Django CoC](https://www.djangoproject.com/conduct/).
-  Make soft, not bullshit.
+MIT. See [LICENSE](LICENSE). Original work © Ilya Lebedev and contributors.
