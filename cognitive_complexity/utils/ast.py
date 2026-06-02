@@ -1,27 +1,46 @@
 import ast
 
-from typing import Callable, Tuple, Union
+from typing import Callable
 
 from cognitive_complexity.common_types import AnyFuncdef
 
 
+def _call_targets_name(call: ast.Call, name: str) -> bool:
+    func = call.func
+    if isinstance(func, ast.Name):
+        return func.id == name
+    if isinstance(func, ast.Attribute) and func.attr == name:
+        # method recursion: self.name(...) / cls.name(...)
+        return isinstance(func.value, ast.Name) and func.value.id in ("self", "cls")
+    return False
+
+
 def has_recursive_calls(funcdef: AnyFuncdef) -> bool:
-    return bool([
-        n for n in ast.walk(funcdef)
-        if (
-            isinstance(n, ast.Call)
-            and isinstance(n.func, ast.Name)
-            and n.func.id == funcdef.name
-        )
-    ])
+    return any(
+        _call_targets_name(node, funcdef.name)
+        for node in ast.walk(funcdef)
+        if isinstance(node, ast.Call)
+    )
+
+
+def _returns_name(stmt: ast.stmt, name: str) -> bool:
+    return (
+        isinstance(stmt, ast.Return)
+        and isinstance(stmt.value, ast.Name)
+        and stmt.value.id == name
+    )
 
 
 def is_decorator(funcdef: AnyFuncdef) -> bool:
+    # Defines a single inner function and returns *that function by name*.
+    # A decorator and a value-returning closure factory are structurally
+    # identical, so both are scored by their inner function. Returning anything
+    # other than the inner function (e.g. a constant) is not this pattern.
     return (
-        isinstance(funcdef, ast.FunctionDef)
+        isinstance(funcdef, (ast.FunctionDef, ast.AsyncFunctionDef))
         and len(funcdef.body) == 2
-        and isinstance(funcdef.body[0], ast.FunctionDef)
-        and isinstance(funcdef.body[1], ast.Return)
+        and isinstance(funcdef.body[0], (ast.FunctionDef, ast.AsyncFunctionDef))
+        and _returns_name(funcdef.body[1], funcdef.body[0].name)
     )
 
 
@@ -43,9 +62,9 @@ def process_child_nodes(
 
 
 def process_control_flow_breaker(
-    node: Union[ast.If, ast.For, ast.While, ast.IfExp, ast.ExceptHandler],
+    node: ast.If | ast.For | ast.AsyncFor | ast.While | ast.IfExp | ast.ExceptHandler | ast.Match,
     increment_by: int,
-) -> Tuple[int, int, bool]:
+) -> tuple[int, int, bool]:
     if isinstance(node, ast.IfExp):
         # C if A else B; ternary operator equivalent
         increment = 0
@@ -55,6 +74,11 @@ def process_control_flow_breaker(
         increment = 0
     elif isinstance(node, ast.ExceptHandler):
         # +1 for the catch/except-handler
+        increment = 0
+        increment_by += 1
+    elif isinstance(node, ast.Match):
+        # a match/switch is a single structural increment plus a nesting level,
+        # regardless of the number of cases (Sonar treats switch as one branch)
         increment = 0
         increment_by += 1
     elif node.orelse:
@@ -71,13 +95,15 @@ def process_control_flow_breaker(
 def process_node_itself(
     node: ast.AST,
     increment_by: int,
-) -> Tuple[int, int, bool]:
+) -> tuple[int, int, bool]:
     control_flow_breakers = (
         ast.If,
         ast.For,
+        ast.AsyncFor,
         ast.While,
         ast.IfExp,
         ast.ExceptHandler,
+        ast.Match,
     )
     incrementers_nodes = (
         ast.FunctionDef,
@@ -94,4 +120,7 @@ def process_node_itself(
         inner_boolops_amount = len([n for n in ast.walk(node) if isinstance(n, ast.BoolOp)])
         base_complexity = inner_boolops_amount
         return increment_by, base_complexity, False
+    elif isinstance(node, ast.comprehension):
+        # each filter condition in a comprehension is a decision point
+        return increment_by, len(node.ifs), True
     return increment_by, 0, True
