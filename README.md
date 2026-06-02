@@ -41,6 +41,10 @@ if your code is too complex. For more details and documentation, visit the
 
 ## What is cognitive complexity
 
+For a synthesis of the research and industry thinking on what makes code hard to
+understand — and how cognitive complexity fits in — see
+[docs/cognitive-complexity-of-code.md](docs/cognitive-complexity-of-code.md).
+
 Here are some readings about cognitive complexity:
 
 - [Cognitive Complexity, Because Testability != Understandability](https://blog.sonarsource.com/cognitive-complexity-because-testability-understandability);
