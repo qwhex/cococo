@@ -41,13 +41,18 @@ setup(
     packages=find_packages(),
     python_requires='>=3.10',
     include_package_data=True,
-    keywords='flake8',
+    keywords='cognitive-complexity flake8 cococo',
     version=get_version(),
     author='Ilya Lebedev',
     author_email='melevir@gmail.com',
     install_requires=['setuptools'],
-    url='https://github.com/Melevir/cognitive_complexity',
+    url='https://github.com/qwhex/cococo',
     license='MIT',
     py_modules=[package_name],
+    entry_points={
+        'console_scripts': [
+            'cococo = cognitive_complexity.cli:main',
+        ],
+    },
     zip_safe=False,
 )

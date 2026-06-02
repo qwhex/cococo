@@ -29,6 +29,17 @@ pip install cognitive_complexity
 1
 ```
 
+### Command line: `cococo`
+
+The package installs a `cococo` command (**co**de **co**gnitive **co**mplexity)
+that scores every function in the given files/directories, worst first:
+
+```bash
+cococo src/                  # list every function, worst first
+cococo src/ --max 20         # gate: exit non-zero if any function exceeds 20
+cococo a.py b.py --min 10    # only show functions scoring >= 10
+```
+
 ### Flake8-Cognitive-Complexity Extension
 
 Perhaps the most common way to use this library (especially if you are
