@@ -71,8 +71,8 @@ We would love you to contribute to our project. It's simple:
 
 Here are useful tips:
 
-- You can run all checks and tests with `make check`. Please do it
-  before TravisCI does.
+- You can run all checks and tests with `just check`. Please do it
+  before CI does.
 - We use [BestDoctor python styleguide](https://github.com/best-doctor/guides/blob/master/guides/python_styleguide.md).
   Sorry, styleguide is available only in Russian for now.
 - We respect [Django CoC](https://www.djangoproject.com/conduct/).
