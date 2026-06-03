@@ -1,0 +1,81 @@
+# Tooling config (lint + type-check) mirrored from the parent cosmetix
+# data_pipeline so this fork is held to the same bar. Packaging metadata still
+# lives in setup.py. Ruleset copied from ../../pyproject.toml; target-version is
+# py310 here (the fork's minimum) rather than py314.
+
+[tool.pytest.ini_options]
+# Anchors the rootdir here so pytest does not climb into the parent
+# data_pipeline tree and load its conftest. The 100% coverage floor is enforced
+# via the `test` recipe in the justfile.
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "I", "W",    # pyflakes, pycodestyle, isort
+    "UP",                    # pyupgrade
+    "B",                     # flake8-bugbear
+    "SIM",                   # flake8-simplify
+    "RUF",                   # ruff-specific
+    "S",                     # flake8-bandit (security)
+    "PTH",                   # flake8-use-pathlib
+    "PERF",                  # perflint
+    "LOG",                   # flake8-logging
+    "T20",                   # flake8-print
+    "A",                     # flake8-builtins (shadow builtin names)
+    "C4",                    # flake8-comprehensions
+    "C90",                   # mccabe complexity
+    "PIE",                   # flake8-pie (misc. lints)
+    "RSE",                   # flake8-raise (unnecessary parens)
+    "FLY",                   # flynt (f-string joins)
+    "FURB",                  # refurb (modernizations)
+    "ASYNC",                 # flake8-async (blocking calls in async context)
+    "ISC",                   # flake8-implicit-str-concat (silent missing-comma footgun)
+]
+ignore = [
+    "E501",    # Line too long (handled by formatter)
+    "S101",    # assert usage in test-heavy codebase
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 20
+
+[tool.ruff.lint.per-file-ignores]
+"cognitive_complexity/cli.py" = ["T201"]  # CLI prints its results to stdout by design
+"tests/*.py" = ["T201", "S101"]
+"benchmarks/*.py" = ["T201", "S101", "S603"]  # benchmark shells out to pytest on trusted local paths
+
+[tool.mypy]
+# Type checking configuration — strict, mirrored from cosmetix data_pipeline.
+python_version = "3.10"
+
+# Exclude test files from type checking
+exclude = [
+    "test_.*\\.py$",
+    "conftest\\.py$",
+]
+
+# Core strict settings for return type annotations
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+warn_return_any = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = false  # Too restrictive for practical use
+
+# Allow flexibility for third-party integration
+disallow_any_unimported = false
+disallow_any_decorated = false
+disallow_any_explicit = true
+disallow_any_generics = true
+disallow_subclassing_any = false
+disallow_untyped_calls = false
+disallow_untyped_decorators = false

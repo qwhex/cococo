@@ -1,20 +1,18 @@
-from typing import Optional
 
-from setuptools import setup, find_packages
+from pathlib import Path
+
+from setuptools import find_packages, setup
 
 
-def get_version() -> Optional[str]:
-    with open('cognitive_complexity/__init__.py', 'r') as f:
-        lines = f.readlines()
-    for line in lines:
+def get_version() -> str | None:
+    for line in Path('cognitive_complexity/__init__.py').read_text().splitlines():
         if line.startswith('__version__'):
             return line.split('=')[-1].strip().strip("'")
     return None
 
 
 def get_long_description() -> str:
-    with open('README.md') as f:
-        return f.read()
+    return Path('README.md').read_text()
 
 
 setup(

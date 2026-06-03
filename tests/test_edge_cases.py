@@ -6,7 +6,6 @@ and comprehension filters.
 """
 from conftest import get_code_snippet_complexity
 
-
 # --------------------------------------------------------------------------
 # Loops: async for counts like for
 # --------------------------------------------------------------------------

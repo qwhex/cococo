@@ -7,9 +7,8 @@ such trees and assert the library matches the closed-form total. The simpler
 linear/triangular properties are kept as readable, targeted documentation.
 """
 import hypothesis.strategies as st
-from hypothesis import given, settings
-
 from conftest import get_code_snippet_complexity
+from hypothesis import given, settings
 
 # A node is either the leaf "leaf" or a (kind, children) control block.
 _KINDS = st.sampled_from(["if", "for", "while"])
@@ -83,7 +82,6 @@ def test_flat_ifs_sum_linearly(n):
 def test_nested_ifs_are_triangular(n):
     # Nesting penalty: depth d contributes d+1, so total is 1+2+...+n.
     lines = ["def f(a):"]
-    for depth in range(n):
-        lines.append("    " * (depth + 1) + "if a:")
+    lines.extend("    " * (depth + 1) + "if a:" for depth in range(n))
     lines.append("    " * (n + 1) + "x = 1")
     assert get_code_snippet_complexity("\n".join(lines)) == n * (n + 1) // 2

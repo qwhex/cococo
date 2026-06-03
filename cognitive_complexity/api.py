@@ -1,10 +1,12 @@
 import ast
-
 from typing import NamedTuple
 
 from cognitive_complexity.common_types import AnyFuncdef
 from cognitive_complexity.utils.ast import (
-    describe_node, has_recursive_calls, is_decorator, process_child_nodes,
+    describe_node,
+    has_recursive_calls,
+    is_decorator,
+    process_child_nodes,
     process_node_itself,
 )
 

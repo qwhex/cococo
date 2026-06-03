@@ -22,7 +22,9 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from cognitive_complexity.api import (
-    Contribution, get_cognitive_complexity, get_cognitive_complexity_breakdown,
+    Contribution,
+    get_cognitive_complexity,
+    get_cognitive_complexity_breakdown,
 )
 
 AnyFunc = ast.FunctionDef | ast.AsyncFunctionDef

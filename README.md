@@ -93,10 +93,13 @@ nesting, recursion, and stacked logical operations.
 
 ```bash
 pip install -r requirements_dev.txt
+just install-hooks  # pre-push runs `just check` (the same gate as CI)
 just check          # lint + type-check + tests + readme lint
 just test           # tests with coverage
 just bench          # performance benchmark
 ```
+
+`just check` is the single gate — CI runs the exact same recipe.
 
 ## License
 

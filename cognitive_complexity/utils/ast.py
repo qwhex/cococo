@@ -1,6 +1,5 @@
 import ast
-
-from typing import Callable
+from collections.abc import Callable
 
 from cognitive_complexity.common_types import AnyFuncdef
 
@@ -85,15 +84,12 @@ def describe_node(node: ast.AST) -> str:
 def process_child_nodes(
     node: ast.AST,
     increment_by: int,
-    complexity_calculator: Callable,
+    complexity_calculator: Callable[[ast.AST, int], int],
 ) -> int:
     child_complexity = 0
     child_nodes = ast.iter_child_nodes(node)
     for child_node in child_nodes:
-        child_complexity += complexity_calculator(
-            child_node,
-            increment_by=increment_by,
-        )
+        child_complexity += complexity_calculator(child_node, increment_by)
     return child_complexity
 
 

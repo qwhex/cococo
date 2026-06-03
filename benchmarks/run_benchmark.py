@@ -58,8 +58,7 @@ def _build_large_function(depth: int, breadth: int) -> ast.AST:
         pad = indent * (level + 1)
         lines.append(f"{pad}if a and b or c and d:  # nesting {level}")
     pad = indent * (depth + 1)
-    for i in range(breadth):
-        lines.append(f"{pad}x{i} = a if b else c")
+    lines.extend(f"{pad}x{i} = a if b else c" for i in range(breadth))
     return ast.parse("\n".join(lines)).body[0]
 
 

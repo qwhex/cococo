@@ -1,0 +1,5 @@
+#!/bin/sh
+# Runs the exact gate CI runs (.github/workflows/ci.yml -> `just check`):
+# lint, type-check, tests, README lint. Enable with `just install-hooks`.
+# Bypass a single push with `git push --no-verify`.
+exec just check
