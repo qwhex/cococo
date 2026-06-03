@@ -6,6 +6,7 @@ node contributes ``depth + 1`` (Sonar's nesting rule). We generate arbitrary
 such trees and assert the library matches the closed-form total. The simpler
 linear/triangular properties are kept as readable, targeted documentation.
 """
+
 import hypothesis.strategies as st
 from conftest import get_code_snippet_complexity
 from hypothesis import given, settings

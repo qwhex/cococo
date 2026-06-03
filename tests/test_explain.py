@@ -68,6 +68,7 @@ def _write(tmp_path, name, src):
 
 # ---- node labelling ------------------------------------------------------
 
+
 def test_describe_node_labels_every_construct_kind():
     cases = {
         "if a:\n    pass": "if",
@@ -98,6 +99,7 @@ def test_describe_node_labels_every_construct_kind():
 
 
 # ---- breakdown API -------------------------------------------------------
+
 
 def test_breakdown_sums_to_total():
     fd = _funcdef(NESTED)
@@ -165,6 +167,7 @@ def test_breakdown_empty_for_flat_function():
 
 # ---- async coverage ------------------------------------------------------
 
+
 def test_breakdown_handles_async_def_and_async_for():
     # The real-world heavy hitters are all `async def`; prove the breakdown
     # scores `async for` (and the `async def` body) just like the sync forms.
@@ -172,7 +175,7 @@ def test_breakdown_handles_async_def_and_async_for():
     assert isinstance(fd, ast.AsyncFunctionDef)
     breakdown = get_cognitive_complexity_breakdown(fd)
     assert [(c.label, c.points, c.nesting) for c in breakdown] == [
-        ("for", 1, 0),   # `async for` is labelled the same as `for`
+        ("for", 1, 0),  # `async for` is labelled the same as `for`
         ("if", 2, 1),
     ]
     assert sum(c.points for c in breakdown) == get_cognitive_complexity(fd)
@@ -188,6 +191,7 @@ def test_explain_async_function_through_cli(tmp_path, capsys):
 
 # ---- structurally-rich invariant -----------------------------------------
 
+
 def test_rich_function_breakdown_sums_to_total():
     # Strong invariant: across a mix of try/except, match, ternary,
     # comprehension, bool-op, and a nested def, the per-construct points must
@@ -198,11 +202,20 @@ def test_rich_function_breakdown_sums_to_total():
     assert sum(c.points for c in breakdown) == get_cognitive_complexity(fd)
     # Every documented construct kind shows up at least once.
     labels = {c.label for c in breakdown}
-    assert {"for", "if", "ternary", "except", "comprehension-if", "while",
-            "bool-op", "match"} <= labels
+    assert {
+        "for",
+        "if",
+        "ternary",
+        "except",
+        "comprehension-if",
+        "while",
+        "bool-op",
+        "match",
+    } <= labels
 
 
 # ---- documented quirks (characterization) --------------------------------
+
 
 def test_quirk_elif_chain_labels_read_counterintuitively():
     # DOCUMENTED QUIRK (a): in an if/elif chain the structural increment is
@@ -239,13 +252,14 @@ def test_quirk_comprehension_filters_inherit_ancestor_lineno():
     """)
     breakdown = get_cognitive_complexity_breakdown(fd)
     [comp] = [c for c in breakdown if c.label == "comprehension-if"]
-    assert comp.points == 2          # two if-filters, each a decision point
-    assert comp.lineno == 2          # borrowed from the enclosing `return`
+    assert comp.points == 2  # two if-filters, each a decision point
+    assert comp.lineno == 2  # borrowed from the enclosing `return`
     assert comp.nesting_counted is False
     assert sum(c.points for c in breakdown) == get_cognitive_complexity(fd)
 
 
 # ---- CLI explain: target forms ------------------------------------------
+
 
 def test_explain_prints_total_and_breakdown(tmp_path, capsys):
     p = _write(tmp_path, "m.py", NESTED)
@@ -296,6 +310,7 @@ def test_explain_flat_function_reports_no_constructs(tmp_path, capsys):
 
 
 # ---- CLI explain: malformed input → clean stderr, nonzero exit -----------
+
 
 def test_explain_missing_function_exits_nonzero(tmp_path, capsys):
     p = _write(tmp_path, "m.py", KLASS)

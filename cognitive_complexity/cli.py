@@ -13,6 +13,7 @@ Usage::
     cococo --explain a.py::Klass.method   # break down one function
     cococo --explain a.py:42              # ...by line number
 """
+
 from __future__ import annotations
 
 import argparse
@@ -39,7 +40,9 @@ def iter_python_files(paths: list[str]) -> Iterator[Path]:
             yield path
 
 
-def _collect(node: ast.AST, qualifier: str, inside_func: bool, out: list[tuple[AnyFunc, str]]) -> None:
+def _collect(
+    node: ast.AST, qualifier: str, inside_func: bool, out: list[tuple[AnyFunc, str]]
+) -> None:
     """Top-level functions and methods; nested defs fold into their enclosing score."""
     for child in ast.iter_child_nodes(node):
         if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -150,12 +153,21 @@ def explain(target: str) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="cococo", description=__doc__.splitlines()[0])
     parser.add_argument("paths", nargs="*", help="Python files or directories to scan")
-    parser.add_argument("--max", type=int, default=None,
-                        help="ceiling: exit non-zero and show only functions above it")
-    parser.add_argument("--min", type=int, default=0,
-                        help="only list functions scoring at least this much")
-    parser.add_argument("--explain", metavar="FILE::QUAL", default=None,
-                        help="break down one function: FILE.py::qualname, FILE.py:LINE, or FILE.py")
+    parser.add_argument(
+        "--max",
+        type=int,
+        default=None,
+        help="ceiling: exit non-zero and show only functions above it",
+    )
+    parser.add_argument(
+        "--min", type=int, default=0, help="only list functions scoring at least this much"
+    )
+    parser.add_argument(
+        "--explain",
+        metavar="FILE::QUAL",
+        default=None,
+        help="break down one function: FILE.py::qualname, FILE.py:LINE, or FILE.py",
+    )
     args = parser.parse_args(argv)
 
     if args.explain is not None:
@@ -169,16 +181,20 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     threshold = args.max if args.max is not None else args.min
-    shown = sorted((r for r in results if r[0] > threshold or (args.max is None and r[0] >= args.min)),
-                   reverse=True)
+    shown = sorted(
+        (r for r in results if r[0] > threshold or (args.max is None and r[0] >= args.min)),
+        reverse=True,
+    )
     for score, path, lineno, qualname in shown:
         print(f"{score:4d}  {path}:{lineno}  {qualname}")
 
     if args.max is not None:
         over = [r for r in results if r[0] > args.max]
         if over:
-            print(f"\ncococo: {len(over)} function(s) exceed cognitive complexity {args.max}",
-                  file=sys.stderr)
+            print(
+                f"\ncococo: {len(over)} function(s) exceed cognitive complexity {args.max}",
+                file=sys.stderr,
+            )
             return 1
         print(f"cococo: all {len(results)} functions within cognitive complexity {args.max}")
     return 0

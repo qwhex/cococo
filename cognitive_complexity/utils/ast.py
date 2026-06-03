@@ -24,9 +24,7 @@ def has_recursive_calls(funcdef: AnyFuncdef) -> bool:
 
 def _returns_name(stmt: ast.stmt, name: str) -> bool:
     return (
-        isinstance(stmt, ast.Return)
-        and isinstance(stmt.value, ast.Name)
-        and stmt.value.id == name
+        isinstance(stmt, ast.Return) and isinstance(stmt.value, ast.Name) and stmt.value.id == name
     )
 
 
@@ -49,35 +47,31 @@ def is_elif(node: ast.AST) -> bool:
     Single source of truth shared by the label (:func:`describe_node`) and the
     scoring (:func:`process_control_flow_breaker`) so the two cannot drift.
     """
-    return (
-        isinstance(node, ast.If)
-        and len(node.orelse) == 1
-        and isinstance(node.orelse[0], ast.If)
-    )
+    return isinstance(node, ast.If) and len(node.orelse) == 1 and isinstance(node.orelse[0], ast.If)
 
 
 def describe_node(node: ast.AST) -> str:
     """Short human label for a scored construct, used in breakdowns."""
     if isinstance(node, ast.If):
-        return 'elif' if is_elif(node) else 'if'
+        return "elif" if is_elif(node) else "if"
     if isinstance(node, ast.IfExp):
-        return 'ternary'
+        return "ternary"
     if isinstance(node, (ast.For, ast.AsyncFor)):
-        return 'for'
+        return "for"
     if isinstance(node, ast.While):
-        return 'while'
+        return "while"
     if isinstance(node, ast.ExceptHandler):
-        return 'except'
+        return "except"
     if isinstance(node, ast.Match):
-        return 'match'
+        return "match"
     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-        return 'nested-func'
+        return "nested-func"
     if isinstance(node, ast.Lambda):
-        return 'lambda'
+        return "lambda"
     if isinstance(node, ast.BoolOp):
-        return 'bool-op'
+        return "bool-op"
     if isinstance(node, ast.comprehension):
-        return 'comprehension-if'
+        return "comprehension-if"
     return type(node).__name__
 
 

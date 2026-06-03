@@ -21,6 +21,7 @@ Usage::
     python benchmarks/run_benchmark.py --mode compute -n 200
     python benchmarks/run_benchmark.py -- -k try        # extra pytest args
 """
+
 from __future__ import annotations
 
 import argparse
@@ -37,8 +38,14 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 def run_suite_once(pytest_args: list[str]) -> float:
     """Run the full suite once in a subprocess; return wall-clock seconds."""
     cmd = [
-        sys.executable, "-m", "pytest", "tests/",
-        "-q", "-p", "no:cacheprovider", *pytest_args,
+        sys.executable,
+        "-m",
+        "pytest",
+        "tests/",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        *pytest_args,
     ]
     start = time.perf_counter()
     result = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True)
@@ -108,7 +115,8 @@ def summarize(label: str, durations: list[float]) -> dict[str, float]:
 
 def main(argv: list[str] | None = None) -> dict[str, float]:
     parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--mode", choices=("suite", "compute"), default="suite")
     parser.add_argument("-n", "--runs", type=int, default=20)

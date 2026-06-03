@@ -46,8 +46,8 @@ def get_cognitive_complexity(funcdef: AnyFuncdef) -> int:
 
 
 def get_cognitive_complexity_for_node(
-        node: ast.AST,
-        increment_by: int = 0,
+    node: ast.AST,
+    increment_by: int = 0,
 ) -> int:
     increment_by, base_complexity, should_iter_children = process_node_itself(node, increment_by)
 
@@ -78,7 +78,7 @@ def get_cognitive_complexity_breakdown(funcdef: AnyFuncdef) -> list[Contribution
     for node in funcdef.body:
         _collect_breakdown(node, 0, funcdef.lineno, contributions)
     if has_recursive_calls(funcdef):
-        contributions.append(Contribution(funcdef.lineno, 'recursion', 1, 0, False))
+        contributions.append(Contribution(funcdef.lineno, "recursion", 1, 0, False))
     return contributions
 
 
@@ -92,7 +92,7 @@ def _collect_breakdown(
     increment_by, base_complexity, should_iter_children = process_node_itself(node, increment_by)
     # Some scored nodes (ast.comprehension) carry no line of their own; fall
     # back to the nearest ancestor that did.
-    lineno = getattr(node, 'lineno', parent_lineno)
+    lineno = getattr(node, "lineno", parent_lineno)
 
     if base_complexity:
         # Control-flow breakers bumped ``increment_by`` for their own body, so
@@ -101,9 +101,15 @@ def _collect_breakdown(
         # bump, so they sit at the ambient level with no nesting penalty.
         nesting_counted = increment_by != nesting_before
         node_nesting = increment_by - 1 if nesting_counted else nesting_before
-        out.append(Contribution(
-            lineno, describe_node(node), base_complexity, node_nesting, nesting_counted,
-        ))
+        out.append(
+            Contribution(
+                lineno,
+                describe_node(node),
+                base_complexity,
+                node_nesting,
+                nesting_counted,
+            )
+        )
 
     if should_iter_children:
         for child in ast.iter_child_nodes(node):

@@ -1,10 +1,18 @@
 # `just check` is the single gate: CI runs it (see .github/workflows/ci.yml)
 # and the pre-push hook runs it locally (see `just install-hooks`).
-check: lint typecheck test check-readme
+check: format-check lint typecheck test check-readme
 
 # Lint with ruff (ruleset mirrors the parent cosmetix data_pipeline)
 lint:
     ruff check .
+
+# Reformat with ruff
+format:
+    ruff format .
+
+# Verify formatting without modifying files (run in `check`)
+format-check:
+    ruff format --check .
 
 # Type-check the package with mypy (strict)
 typecheck:
