@@ -44,6 +44,32 @@ def is_decorator(funcdef: AnyFuncdef) -> bool:
     )
 
 
+def describe_node(node: ast.AST) -> str:
+    """Short human label for a scored construct, used in breakdowns."""
+    if isinstance(node, ast.If):
+        is_elif = len(node.orelse) == 1 and isinstance(node.orelse[0], ast.If)
+        return 'elif' if is_elif else 'if'
+    if isinstance(node, ast.IfExp):
+        return 'ternary'
+    if isinstance(node, (ast.For, ast.AsyncFor)):
+        return 'for'
+    if isinstance(node, ast.While):
+        return 'while'
+    if isinstance(node, ast.ExceptHandler):
+        return 'except'
+    if isinstance(node, ast.Match):
+        return 'match'
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return 'nested-func'
+    if isinstance(node, ast.Lambda):
+        return 'lambda'
+    if isinstance(node, ast.BoolOp):
+        return 'bool-op'
+    if isinstance(node, ast.comprehension):
+        return 'comprehension-if'
+    return type(node).__name__
+
+
 def process_child_nodes(
     node: ast.AST,
     increment_by: int,

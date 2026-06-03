@@ -10,6 +10,8 @@ Usage::
     cococo src/                  # list every function, worst first
     cococo src/ --max 20         # gate: fail if any function exceeds 20
     cococo a.py b.py --min 10    # only show functions scoring >= 10
+    cococo --explain a.py::Klass.method   # break down one function
+    cococo --explain a.py:42              # ...by line number
 """
 from __future__ import annotations
 
@@ -19,7 +21,9 @@ import sys
 from collections.abc import Iterator
 from pathlib import Path
 
-from cognitive_complexity.api import get_cognitive_complexity
+from cognitive_complexity.api import (
+    Contribution, get_cognitive_complexity, get_cognitive_complexity_breakdown,
+)
 
 AnyFunc = ast.FunctionDef | ast.AsyncFunctionDef
 
@@ -60,14 +64,102 @@ def score_paths(paths: list[str]) -> list[tuple[int, Path, int, str]]:
     return results
 
 
+def _parse_target(target: str) -> tuple[Path, str | None, int | None]:
+    """Split ``file.py::qualname`` / ``file.py:lineno`` / ``file.py`` into parts.
+
+    Returns ``(path, qualname, lineno)`` with exactly one of qualname/lineno set
+    (or both ``None`` to mean "the only function in the file").
+    """
+    if "::" in target:
+        raw, _, qual = target.partition("::")
+        return Path(raw), qual, None
+    head, sep, tail = target.rpartition(":")
+    if sep and tail.isdigit() and head.endswith(".py"):
+        return Path(head), None, int(tail)
+    return Path(target), None, None
+
+
+def _find_function(
+    path: Path,
+    qualname: str | None,
+    lineno: int | None,
+) -> tuple[AnyFunc, str]:
+    """Locate one function in ``path`` by qualname or line number.
+
+    With neither selector, the file must contain exactly one function.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    funcs: list[tuple[AnyFunc, str]] = []
+    _collect(tree, "", False, funcs)
+    if not funcs:
+        raise LookupError(f"no functions found in {path}")
+    if qualname is not None:
+        matches = [f for f in funcs if f[1] == qualname]
+        if not matches:
+            known = ", ".join(sorted(q for _, q in funcs))
+            raise LookupError(f"no function {qualname!r} in {path}; found: {known}")
+        return matches[0]
+    if lineno is not None:
+        matches = [f for f in funcs if f[0].lineno == lineno]
+        if not matches:
+            raise LookupError(f"no function defined on line {lineno} of {path}")
+        return matches[0]
+    if len(funcs) != 1:
+        known = ", ".join(sorted(q for _, q in funcs))
+        raise LookupError(f"{path} has {len(funcs)} functions; name one (file.py::qual): {known}")
+    return funcs[0]
+
+
+def _format_breakdown(
+    funcdef: AnyFunc,
+    qualname: str,
+    path: Path,
+    breakdown: list[Contribution],
+) -> str:
+    total = sum(c.points for c in breakdown)
+    lines = [f"{qualname}  ({path}:{funcdef.lineno})  cognitive complexity = {total}"]
+    if not breakdown:
+        lines.append("  (no scored constructs — flat function)")
+        return "\n".join(lines)
+    lines.append(f"  {'line':>6}  {'pts':>3}  {'nest':>4}  construct")
+    for c in sorted(breakdown, key=lambda c: (c.lineno, -c.points)):
+        indent = "  " * c.nesting
+        if c.nesting_counted and c.nesting:
+            note = f"(+{c.points - c.nesting} base, +{c.nesting} nesting)"
+        else:
+            note = f"(+{c.points})"
+        lines.append(f"  {c.lineno:>6}  {c.points:>3}  {c.nesting:>4}  {indent}{c.label}  {note}")
+    return "\n".join(lines)
+
+
+def explain(target: str) -> int:
+    """Print a per-construct cognitive-complexity breakdown for one function."""
+    path, qualname, lineno = _parse_target(target)
+    try:
+        funcdef, qual = _find_function(path, qualname, lineno)
+    except (LookupError, OSError, SyntaxError) as exc:
+        print(f"cococo: {exc}", file=sys.stderr)
+        return 1
+    breakdown = get_cognitive_complexity_breakdown(funcdef)
+    print(_format_breakdown(funcdef, qual, path, breakdown))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="cococo", description=__doc__.splitlines()[0])
-    parser.add_argument("paths", nargs="+", help="Python files or directories to scan")
+    parser.add_argument("paths", nargs="*", help="Python files or directories to scan")
     parser.add_argument("--max", type=int, default=None,
                         help="ceiling: exit non-zero and show only functions above it")
     parser.add_argument("--min", type=int, default=0,
                         help="only list functions scoring at least this much")
+    parser.add_argument("--explain", metavar="FILE::QUAL", default=None,
+                        help="break down one function: FILE.py::qualname, FILE.py:LINE, or FILE.py")
     args = parser.parse_args(argv)
+
+    if args.explain is not None:
+        return explain(args.explain)
+    if not args.paths:
+        parser.error("the following arguments are required: paths (or use --explain)")
 
     results = score_paths(args.paths)
     if not results:
