@@ -9,7 +9,7 @@ linear/triangular properties are kept as readable, targeted documentation.
 import hypothesis.strategies as st
 from hypothesis import given, settings
 
-from conftest import get_code_snippet_compexity
+from conftest import get_code_snippet_complexity
 
 # A node is either the leaf "leaf" or a (kind, children) control block.
 _KINDS = st.sampled_from(["if", "for", "while"])
@@ -55,18 +55,18 @@ def _expected(nodes: list, depth: int = 0) -> int:
 @given(_body)
 @settings(max_examples=300)
 def test_matches_closed_form_for_plain_nesting(nodes):
-    assert get_code_snippet_compexity(_to_source(nodes)) == _expected(nodes)
+    assert get_code_snippet_complexity(_to_source(nodes)) == _expected(nodes)
 
 
 @given(_body)
 def test_complexity_is_non_negative(nodes):
-    assert get_code_snippet_compexity(_to_source(nodes)) >= 0
+    assert get_code_snippet_complexity(_to_source(nodes)) >= 0
 
 
 @given(_body)
 def test_scoring_is_deterministic(nodes):
     src = _to_source(nodes)
-    assert get_code_snippet_compexity(src) == get_code_snippet_compexity(src)
+    assert get_code_snippet_complexity(src) == get_code_snippet_complexity(src)
 
 
 @given(st.integers(min_value=0, max_value=20))
@@ -76,7 +76,7 @@ def test_flat_ifs_sum_linearly(n):
         lines.append("    if a:")
         lines.append("        x = 1")
     lines.append("    return 0")
-    assert get_code_snippet_compexity("\n".join(lines)) == n
+    assert get_code_snippet_complexity("\n".join(lines)) == n
 
 
 @given(st.integers(min_value=1, max_value=20))
@@ -86,4 +86,4 @@ def test_nested_ifs_are_triangular(n):
     for depth in range(n):
         lines.append("    " * (depth + 1) + "if a:")
     lines.append("    " * (n + 1) + "x = 1")
-    assert get_code_snippet_compexity("\n".join(lines)) == n * (n + 1) // 2
+    assert get_code_snippet_complexity("\n".join(lines)) == n * (n + 1) // 2

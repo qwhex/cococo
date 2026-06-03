@@ -9,9 +9,9 @@ lint:
 typecheck:
     mypy .
 
-# Run the test suite with coverage
+# Run the test suite with coverage (enforces setup.cfg's 100% floor)
 test:
-    python -m pytest --cov=cognitive_complexity --cov-report=xml
+    python -m pytest --cov=cognitive_complexity --cov-report=xml --cov-fail-under=100
 
 # Lint the README
 check-readme:

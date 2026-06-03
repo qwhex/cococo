@@ -1,8 +1,8 @@
-from conftest import get_code_snippet_compexity
+from conftest import get_code_snippet_complexity
 
 
 def test_simple_if_simple_condition_complexity():
-    assert get_code_snippet_compexity("""
+    assert get_code_snippet_complexity("""
     def f(a, b):
         if a:  # +1
             return 1
@@ -10,7 +10,7 @@ def test_simple_if_simple_condition_complexity():
 
 
 def test_simple_if_simple_condition_complexity_with_print():
-    assert get_code_snippet_compexity("""
+    assert get_code_snippet_complexity("""
     def f(a, b):
         if a:  # +1
             print('1')
@@ -18,7 +18,7 @@ def test_simple_if_simple_condition_complexity_with_print():
 
 
 def test_simple_if_serial_condition_complexity():
-    assert get_code_snippet_compexity("""
+    assert get_code_snippet_complexity("""
     def f(a, b):
         if a and b and True:  # +2
             return 1
@@ -26,7 +26,7 @@ def test_simple_if_serial_condition_complexity():
 
 
 def test_simple_if_serial_heterogenious_condition_complexity():
-    assert get_code_snippet_compexity("""
+    assert get_code_snippet_complexity("""
     def f(a, b):
         if a and b or True:  # +3
             return 1
@@ -34,7 +34,7 @@ def test_simple_if_serial_heterogenious_condition_complexity():
 
 
 def test_simple_if_complex_condition_complexity():
-    assert get_code_snippet_compexity("""
+    assert get_code_snippet_complexity("""
     def f(a, b):
         if (  # +1
             a and b and  # +1
@@ -45,7 +45,7 @@ def test_simple_if_complex_condition_complexity():
 
 
 def test_simple_structure_condition_complexity():
-    assert get_code_snippet_compexity("""
+    assert get_code_snippet_complexity("""
     def f(a, b):
         if (a):  # +1
             return 1
@@ -55,7 +55,7 @@ def test_simple_structure_condition_complexity():
 
 
 def test_simple_elif_condition_complexity():
-    assert get_code_snippet_compexity("""
+    assert get_code_snippet_complexity("""
     def f(a, b):
         if (a):  # +1
             return 1
@@ -67,7 +67,7 @@ def test_simple_elif_condition_complexity():
 
 
 def test_simple_else_condition_complexity():
-    assert get_code_snippet_compexity("""
+    assert get_code_snippet_complexity("""
     def f(a):
         if (a):  # +1
             return 1
@@ -77,7 +77,7 @@ def test_simple_else_condition_complexity():
 
 
 def test_nested_structure_condition_complexity():
-    assert get_code_snippet_compexity("""
+    assert get_code_snippet_complexity("""
     def f(a, b):
         if a:  # +1
             for i in range(b):  # +2
@@ -86,7 +86,7 @@ def test_nested_structure_condition_complexity():
 
 
 def test_very_nested_structure_condition_complexity():
-    assert get_code_snippet_compexity("""
+    assert get_code_snippet_complexity("""
     def f(a, b):
         if a:  # +1
             for i in range(b):  # +2
@@ -96,7 +96,7 @@ def test_very_nested_structure_condition_complexity():
 
 
 def test_try_condition_complexity_simple():
-    assert get_code_snippet_compexity("""
+    assert get_code_snippet_complexity("""
     def f():
         try:
             print('hello1')
@@ -106,7 +106,7 @@ def test_try_condition_complexity_simple():
 
 
 def test_try_condition_complexity_with_multiple_lines():
-    assert get_code_snippet_compexity("""
+    assert get_code_snippet_complexity("""
     def f(a, b):
         try:
             print('hello1')
@@ -120,7 +120,7 @@ def test_try_condition_complexity_with_multiple_lines():
 
 
 def test_try_condition_complexity_with_nesting():
-    assert get_code_snippet_compexity("""
+    assert get_code_snippet_complexity("""
     def f(a, b):
         try:
             for foo in bar:  # +1
@@ -133,14 +133,14 @@ def test_try_condition_complexity_with_nesting():
 
 
 def test_recursion_complexity():
-    assert get_code_snippet_compexity("""
+    assert get_code_snippet_complexity("""
     def f(a):
         return a * f(a - 1)  # +1 for recursion
     """) == 1
 
 
 def test_real_function():
-    assert get_code_snippet_compexity("""
+    assert get_code_snippet_complexity("""
     def process_raw_constant(constant, min_word_length):
         processed_words = []
         raw_camelcase_words = []
@@ -159,7 +159,7 @@ def test_real_function():
 
 
 def test_real_function_with_try():
-    assert get_code_snippet_compexity("""
+    assert get_code_snippet_complexity("""
     def process_raw_constant(constant, min_word_length):
         try:
             processed_words = []
@@ -181,7 +181,7 @@ def test_real_function_with_try():
 
 
 def test_break_and_continue():
-    assert get_code_snippet_compexity("""
+    assert get_code_snippet_complexity("""
     def f(a):
         for a in range(10):  # +1
             if a % 2:  # +2
@@ -192,7 +192,7 @@ def test_break_and_continue():
 
 
 def test_nested_functions():
-    assert get_code_snippet_compexity("""
+    assert get_code_snippet_complexity("""
     def f(a):
         def foo(a):
             if a:  # +2
@@ -203,7 +203,7 @@ def test_nested_functions():
 
 
 def test_ternary_operator():
-    assert get_code_snippet_compexity("""
+    assert get_code_snippet_complexity("""
     def f(a):
         if a % 2:  # +1
             return 'c' if a else 'd'  # +2
@@ -212,7 +212,7 @@ def test_ternary_operator():
 
 
 def test_nested_if_condition_complexity():
-    assert get_code_snippet_compexity("""
+    assert get_code_snippet_complexity("""
     def f(a, b):
         if a == b:  # +1
             if (a):  # +2 (nesting=1)
@@ -222,7 +222,7 @@ def test_nested_if_condition_complexity():
 
 
 def test_nested_else_condition_complexity():
-    assert get_code_snippet_compexity("""
+    assert get_code_snippet_complexity("""
     def f(a, b):
         if a == b:  # +1
             if (a):  # +2 (nesting=1)
@@ -234,7 +234,7 @@ def test_nested_else_condition_complexity():
 
 
 def test_nested_elif_condition_complexity():
-    assert get_code_snippet_compexity("""
+    assert get_code_snippet_complexity("""
     def f(a, b):
         if a == b:  # +1
             if (a):  # +2 (nesting=1)
@@ -248,7 +248,7 @@ def test_nested_elif_condition_complexity():
 
 
 def test_for_else_complexity():
-    assert get_code_snippet_compexity("""
+    assert get_code_snippet_complexity("""
     def f(a):
         for a in range(10):  # +1
             if a % 2:  # +2
@@ -261,7 +261,7 @@ def test_for_else_complexity():
 
 
 def test_while_else_complexity():
-    assert get_code_snippet_compexity("""
+    assert get_code_snippet_complexity("""
     def f(a):
         a = 0
         while a < 10:  # +1
@@ -276,7 +276,7 @@ def test_while_else_complexity():
 
 
 def test_a_decorator_complexity():
-    assert get_code_snippet_compexity("""
+    assert get_code_snippet_complexity("""
     def a_decorator(a, b):
         def inner(func):  # nesting = 0
             if condition:  # +1
@@ -287,7 +287,7 @@ def test_a_decorator_complexity():
 
 
 def test_not_a_decorator_complexity():
-    assert get_code_snippet_compexity("""
+    assert get_code_snippet_complexity("""
     def not_a_decorator(a, b):
         my_var = a*b
         def inner(func):  # nesting = 1
@@ -299,7 +299,7 @@ def test_not_a_decorator_complexity():
 
 
 def test_decorator_generator_complexity():
-    assert get_code_snippet_compexity("""
+    assert get_code_snippet_complexity("""
     def decorator_generator(a):
         def generator(func):
             def decorator(func): # nesting = 0

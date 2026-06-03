@@ -28,6 +28,21 @@ def test_score_paths_finds_functions(tmp_path):
     assert scores["g"] == 0
 
 
+def test_score_paths_accepts_a_bare_file_and_module_level_statements(tmp_path):
+    # A `.py` path is scored directly (not only directories), and module-level
+    # statements that aren't defs/classes are walked past without error.
+    p = _write(tmp_path, "m.py", "import os\nVALUE = 1\n" + NESTED)
+    scores = {qual: score for score, _, _, qual in score_paths([str(p)])}
+    assert scores == {"f": 10}
+
+
+def test_score_paths_skips_unparseable_files(tmp_path):
+    _write(tmp_path, "good.py", FLAT)
+    _write(tmp_path, "bad.py", "def f(:\n    pass\n")
+    quals = {qual for _, _, _, qual in score_paths([str(tmp_path)])}
+    assert quals == {"g"}
+
+
 def test_main_gate_fails_when_over_max(tmp_path, capsys):
     _write(tmp_path, "m.py", NESTED)
     assert main([str(tmp_path), "--max", "5"]) == 1

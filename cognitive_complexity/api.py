@@ -46,9 +46,7 @@ def get_cognitive_complexity(funcdef: AnyFuncdef) -> int:
 def get_cognitive_complexity_for_node(
         node: ast.AST,
         increment_by: int = 0,
-        verbose: bool = False,
 ) -> int:
-
     increment_by, base_complexity, should_iter_children = process_node_itself(node, increment_by)
 
     child_complexity = 0
@@ -56,17 +54,10 @@ def get_cognitive_complexity_for_node(
         child_complexity += process_child_nodes(
             node,
             increment_by,
-            verbose,
             get_cognitive_complexity_for_node,
         )
 
-    complexity = base_complexity + child_complexity
-    if verbose:
-        print(  # noqa
-            f'Complexity for {node} is {complexity} ({base_complexity} + {child_complexity})'
-            f' (increment {increment_by})',
-        )
-    return complexity
+    return base_complexity + child_complexity
 
 
 def get_cognitive_complexity_breakdown(funcdef: AnyFuncdef) -> list[Contribution]:

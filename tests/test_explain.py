@@ -4,6 +4,7 @@ import pytest
 
 from cognitive_complexity.api import get_cognitive_complexity, get_cognitive_complexity_breakdown
 from cognitive_complexity.cli import explain, main
+from cognitive_complexity.utils.ast import describe_node
 
 NESTED = """
 def f(a, b):
@@ -65,6 +66,37 @@ def _write(tmp_path, name, src):
     return path
 
 
+# ---- node labelling ------------------------------------------------------
+
+def test_describe_node_labels_every_construct_kind():
+    cases = {
+        "if a:\n    pass": "if",
+        "if a:\n    pass\nelif b:\n    pass": "elif",
+        "x = a if b else c": "ternary",
+        "for x in xs:\n    pass": "for",
+        "while a:\n    pass": "while",
+        "match a:\n    case _:\n        pass": "match",
+        "def inner():\n    pass": "nested-func",
+        "f = lambda x: x": "lambda",
+        "x = a and b": "bool-op",
+    }
+    for src, expected in cases.items():
+        node = ast.parse(src).body[0]
+        # Unwrap statements that hold the construct in a child position.
+        if expected in {"ternary", "lambda", "bool-op"}:
+            node = node.value  # type: ignore[attr-defined]
+        assert describe_node(node) == expected
+    # async for is labelled the same as for; except handler; comprehension.
+    afor = ast.parse("async def f():\n    async for x in xs:\n        pass").body[0].body[0]
+    assert describe_node(afor) == "for"
+    handler = ast.parse("try:\n    pass\nexcept E:\n    pass").body[0].handlers[0]
+    assert describe_node(handler) == "except"
+    comp = ast.parse("[x for x in xs if x]").body[0].value.generators[0]
+    assert describe_node(comp) == "comprehension-if"
+    # Fallback for any other node kind: its AST class name.
+    assert describe_node(ast.parse("x = 1").body[0]) == "Assign"
+
+
 # ---- breakdown API -------------------------------------------------------
 
 def test_breakdown_sums_to_total():
@@ -95,6 +127,23 @@ def test_breakdown_bool_op_has_no_nesting_penalty():
     boolop = next(c for c in breakdown if c.label == "bool-op")
     assert boolop.points == 1
     assert boolop.nesting_counted is False
+
+
+def test_breakdown_scores_decorator_by_inner_function():
+    # Mirrors the scalar API: a decorator/closure factory is unwrapped and
+    # scored by its inner function, and the per-construct points still sum to
+    # the scalar total.
+    fd = _funcdef("""
+    def a_decorator(a, b):
+        def inner(func):
+            if condition:   # +1
+                print(b)
+            func()
+        return inner
+    """)
+    breakdown = get_cognitive_complexity_breakdown(fd)
+    assert [(c.label, c.points, c.nesting) for c in breakdown] == [("if", 1, 0)]
+    assert sum(c.points for c in breakdown) == get_cognitive_complexity(fd) == 1
 
 
 def test_breakdown_counts_recursion():
@@ -289,6 +338,23 @@ def test_explain_empty_qualname(tmp_path, capsys):
     err = capsys.readouterr().err
     assert err.startswith("cococo:")
     assert "Traceback" not in err
+
+
+def test_explain_file_without_functions_exits_nonzero(tmp_path, capsys):
+    p = _write(tmp_path, "novars.py", "VALUE = 1\n")
+    assert main(["--explain", str(p)]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("cococo:")
+    assert "no functions found" in err
+
+
+def test_explain_wrong_line_number_exits_nonzero(tmp_path, capsys):
+    # `FILE.py:LINE` pointing at a line with no function definition.
+    p = _write(tmp_path, "m.py", "def f():\n    return 1\n")
+    assert main(["--explain", f"{p}:99"]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("cococo:")
+    assert "line 99" in err
 
 
 def test_main_requires_paths_without_explain(capsys):

@@ -44,11 +44,23 @@ def is_decorator(funcdef: AnyFuncdef) -> bool:
     )
 
 
+def is_elif(node: ast.AST) -> bool:
+    """True when an ``ast.If`` is the ``elif`` arm of an enclosing ``if``.
+
+    Single source of truth shared by the label (:func:`describe_node`) and the
+    scoring (:func:`process_control_flow_breaker`) so the two cannot drift.
+    """
+    return (
+        isinstance(node, ast.If)
+        and len(node.orelse) == 1
+        and isinstance(node.orelse[0], ast.If)
+    )
+
+
 def describe_node(node: ast.AST) -> str:
     """Short human label for a scored construct, used in breakdowns."""
     if isinstance(node, ast.If):
-        is_elif = len(node.orelse) == 1 and isinstance(node.orelse[0], ast.If)
-        return 'elif' if is_elif else 'if'
+        return 'elif' if is_elif(node) else 'if'
     if isinstance(node, ast.IfExp):
         return 'ternary'
     if isinstance(node, (ast.For, ast.AsyncFor)):
@@ -73,7 +85,6 @@ def describe_node(node: ast.AST) -> str:
 def process_child_nodes(
     node: ast.AST,
     increment_by: int,
-    verbose: bool,
     complexity_calculator: Callable,
 ) -> int:
     child_complexity = 0
@@ -82,7 +93,6 @@ def process_child_nodes(
         child_complexity += complexity_calculator(
             child_node,
             increment_by=increment_by,
-            verbose=verbose,
         )
     return child_complexity
 
@@ -95,7 +105,7 @@ def process_control_flow_breaker(
         # C if A else B; ternary operator equivalent
         increment = 0
         increment_by += 1
-    elif isinstance(node, ast.If) and len(node.orelse) == 1 and isinstance(node.orelse[0], ast.If):
+    elif is_elif(node):
         # node is an elif; the increment will be counted on the ast.If
         increment = 0
     elif isinstance(node, ast.ExceptHandler):
