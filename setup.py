@@ -3,9 +3,6 @@ from typing import Optional
 from setuptools import setup, find_packages
 
 
-package_name = 'cognitive_complexity'
-
-
 def get_version() -> Optional[str]:
     with open('cognitive_complexity/__init__.py', 'r') as f:
         lines = f.readlines()
@@ -21,8 +18,11 @@ def get_long_description() -> str:
 
 
 setup(
-    name=package_name,
-    description='Library to calculate Python functions cognitive complexity via code',
+    # Distribution name kept as the importable package name: the parent
+    # data_pipeline depends on it as `cognitive-complexity`. The repo and CLI
+    # are branded `cococo` (see README).
+    name='cognitive_complexity',
+    description='Library and CLI to compute the cognitive complexity of Python functions',
     classifiers=[
         'Environment :: Console',
         'Operating System :: OS Independent',
@@ -41,14 +41,12 @@ setup(
     packages=find_packages(),
     python_requires='>=3.10',
     include_package_data=True,
-    keywords='cognitive-complexity flake8 cococo',
+    keywords='cognitive-complexity cli flake8 cococo',
     version=get_version(),
-    author='Ilya Lebedev',
-    author_email='melevir@gmail.com',
-    install_requires=['setuptools'],
+    author='Mice Pápai',
+    author_email='hello@micepapai.com',
     url='https://github.com/qwhex/cococo',
     license='MIT',
-    py_modules=[package_name],
     entry_points={
         'console_scripts': [
             'cococo = cognitive_complexity.cli:main',

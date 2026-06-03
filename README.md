@@ -5,8 +5,8 @@ cognitive complexity of Python functions.
 
 This is a fork of [Melevir/cognitive_complexity](https://github.com/Melevir/cognitive_complexity)
 (MIT) that adds a command-line tool, modern-Python construct support, and
-Python 3.10+ packaging. The importable package name is still
-`cognitive_complexity`; the distribution, repo, and CLI are `cococo`.
+Python 3.10+ packaging. The importable package and distribution are still
+named `cognitive_complexity`; the repo and CLI are `cococo`.
 
 ## Installation
 
