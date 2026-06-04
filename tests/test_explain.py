@@ -117,10 +117,11 @@ def test_elif_chain_labels_match_source_order():
             return 3
     """)
     breakdown = get_cognitive_complexity_breakdown(fd)
+    # Only the leading `if` carries a nesting penalty (B3); `elif` arms do not.
     assert [(c.label, c.points, c.nesting_counted) for c in breakdown] == [
-        ("if", 1, False),
+        ("if", 1, True),
         ("elif", 1, False),
-        ("elif", 1, True),
+        ("elif", 1, False),
     ]
     assert sum(c.points for c in breakdown) == get_cognitive_complexity(fd) == 3
 

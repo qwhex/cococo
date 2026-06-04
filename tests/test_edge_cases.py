@@ -186,6 +186,44 @@ def test_comprehension_without_filter_is_zero():
 
 
 # --------------------------------------------------------------------------
+# if/elif chains: each branch's body nests; the elif itself does not
+# --------------------------------------------------------------------------
+
+
+def test_structure_nested_in_a_branch_with_an_elif_still_nests():
+    # The `if a` body is one level deep, so the nested `if b` scores +2, even
+    # though `if a` is chained to an `elif`. Regression: this used to drop the
+    # nesting level and score 3.
+    assert (
+        get_code_snippet_complexity("""
+    def f(a, b, c):
+        if a:           # +1
+            if b:       # +2 (nested in the if-body)
+                x = 1
+        elif c:         # +1 (sibling, no nesting penalty)
+            y = 1
+    """)
+        == 4
+    )
+
+
+def test_elif_does_not_add_a_nesting_penalty_inside_a_loop():
+    # `if a` inside the loop is +2 (nesting 1); the chained `elif b` is +1 — an
+    # elif gets a structural increment but no nesting penalty.
+    assert (
+        get_code_snippet_complexity("""
+    def f(a, b):
+        for x in a:     # +1
+            if a:       # +2
+                y = 1
+            elif b:     # +1
+                z = 1
+    """)
+        == 4
+    )
+
+
+# --------------------------------------------------------------------------
 # Trivial guards
 # --------------------------------------------------------------------------
 

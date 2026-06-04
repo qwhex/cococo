@@ -1,5 +1,4 @@
 import ast
-from collections.abc import Callable
 
 from cognitive_complexity.common_types import AnyFuncdef
 
@@ -45,16 +44,6 @@ def is_decorator(funcdef: AnyFuncdef) -> bool:
     )
 
 
-def precedes_elif(node: ast.AST) -> bool:
-    """True when ``node`` is an ``if`` whose ``else`` branch is itself a lone
-    ``if`` — i.e. it is immediately followed by an ``elif`` clause.
-
-    Note this describes the *node's own* shape, not its position: it is the
-    head/middle of an if/elif chain, and ``node.orelse[0]`` is the next arm.
-    """
-    return isinstance(node, ast.If) and len(node.orelse) == 1 and isinstance(node.orelse[0], ast.If)
-
-
 # Static node-type -> label dispatch. ``ast.If`` is handled separately because
 # its label depends on whether it is an elif arm, which is positional.
 _NODE_LABELS: tuple[tuple[type[ast.AST] | tuple[type[ast.AST], ...], str], ...] = (
@@ -85,29 +74,16 @@ def describe_node(node: ast.AST, *, is_elif_arm: bool = False) -> str:
     return type(node).__name__
 
 
-def process_child_nodes(
-    node: ast.AST,
-    increment_by: int,
-    complexity_calculator: Callable[[ast.AST, int], int],
-) -> int:
-    child_complexity = 0
-    child_nodes = ast.iter_child_nodes(node)
-    for child_node in child_nodes:
-        child_complexity += complexity_calculator(child_node, increment_by)
-    return child_complexity
-
-
 def process_control_flow_breaker(
-    node: ast.If | ast.For | ast.AsyncFor | ast.While | ast.IfExp | ast.ExceptHandler | ast.Match,
+    node: ast.For | ast.AsyncFor | ast.While | ast.IfExp | ast.ExceptHandler | ast.Match,
     increment_by: int,
 ) -> tuple[int, int, bool]:
+    # `ast.If` is handled by api._collect_if_breakdown, not here, so that
+    # if/elif/else chains can score body and orelse at different nesting levels.
     if isinstance(node, ast.IfExp):
         # C if A else B; ternary operator equivalent
         increment = 0
         increment_by += 1
-    elif precedes_elif(node):
-        # chained if/elif: no extra "else" increment here (counted along the chain)
-        increment = 0
     elif isinstance(node, ast.ExceptHandler):
         # +1 for the catch/except-handler
         increment = 0
@@ -132,8 +108,8 @@ def process_node_itself(
     node: ast.AST,
     increment_by: int,
 ) -> tuple[int, int, bool]:
+    # `ast.If` is intercepted by api._collect_if_breakdown before reaching here.
     control_flow_breakers = (
-        ast.If,
         ast.For,
         ast.AsyncFor,
         ast.While,

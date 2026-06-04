@@ -6,8 +6,6 @@ from cognitive_complexity.utils.ast import (
     describe_node,
     has_recursive_calls,
     is_decorator,
-    precedes_elif,
-    process_child_nodes,
     process_node_itself,
 )
 
@@ -22,9 +20,9 @@ class Contribution(NamedTuple):
 
     For control-flow breakers (if/for/while/except/match/ternary) the nesting
     penalty is *part of* ``points`` and ``nesting_counted`` is true, so the
-    structural cost is ``points - nesting``. For bool-ops and comprehension
-    filters ``nesting`` is only ambient context (``nesting_counted`` false) and
-    all of ``points`` is structural.
+    structural cost is ``points - nesting``. For ``elif``/``else``, bool-ops and
+    comprehension filters ``nesting`` is only ambient context
+    (``nesting_counted`` false) and all of ``points`` is structural.
     """
 
     lineno: int
@@ -35,42 +33,17 @@ class Contribution(NamedTuple):
 
 
 def get_cognitive_complexity(funcdef: AnyFuncdef) -> int:
-    if is_decorator(funcdef):
-        return get_cognitive_complexity(funcdef.body[0])  # type: ignore
-
-    complexity = 0
-    for node in funcdef.body:
-        complexity += get_cognitive_complexity_for_node(node)
-    if has_recursive_calls(funcdef):
-        complexity += 1
-    return complexity
-
-
-def get_cognitive_complexity_for_node(
-    node: ast.AST,
-    increment_by: int = 0,
-) -> int:
-    increment_by, base_complexity, should_iter_children = process_node_itself(node, increment_by)
-
-    child_complexity = 0
-    if should_iter_children:
-        child_complexity += process_child_nodes(
-            node,
-            increment_by,
-            get_cognitive_complexity_for_node,
-        )
-
-    return base_complexity + child_complexity
+    """Total cognitive complexity: the sum of every scored construct's points."""
+    return sum(c.points for c in get_cognitive_complexity_breakdown(funcdef))
 
 
 def get_cognitive_complexity_breakdown(funcdef: AnyFuncdef) -> list[Contribution]:
     """Per-node breakdown of a function's cognitive complexity.
 
-    Mirrors :func:`get_cognitive_complexity` but, instead of only the total,
-    records every construct that contributed points and the nesting level in
-    effect at that point. Recursive calls add a trailing synthetic entry, just
-    as the scalar API adds ``+1`` for recursion. The ``points`` column sums to
-    the total complexity.
+    Records every construct that contributed points and the nesting level in
+    effect at that point. Recursive calls add a trailing synthetic entry. The
+    ``points`` column sums to the total returned by
+    :func:`get_cognitive_complexity`.
     """
     if is_decorator(funcdef):
         return get_cognitive_complexity_breakdown(funcdef.body[0])  # type: ignore
@@ -88,8 +61,15 @@ def _collect_breakdown(
     increment_by: int,
     parent_lineno: int,
     out: list[Contribution],
-    is_elif_arm: bool = False,
 ) -> None:
+    # `if`/`elif`/`else` chains need their body and orelse scored at different
+    # nesting levels (the body nests one deeper; a trailing `elif` is a sibling
+    # at the same level), which the uniform child walk below cannot express —
+    # so they get their own handler.
+    if isinstance(node, ast.If):
+        _collect_if_breakdown(node, increment_by, out, is_elif_arm=False)
+        return
+
     nesting_before = increment_by
     increment_by, base_complexity, should_iter_children = process_node_itself(node, increment_by)
     # Some scored nodes (ast.comprehension) carry no line of their own; fall
@@ -98,23 +78,53 @@ def _collect_breakdown(
 
     if base_complexity:
         # Control-flow breakers bumped ``increment_by`` for their own body, so
-        # the level *they* sit at is the pre-bump value and their nesting penalty
+        # the level they sit at is the pre-bump value and their nesting penalty
         # is baked into base_complexity. Bool-ops / comprehension filters don't
         # bump, so they sit at the ambient level with no nesting penalty.
         nesting_counted = increment_by != nesting_before
         node_nesting = increment_by - 1 if nesting_counted else nesting_before
         out.append(
             Contribution(
-                lineno,
-                describe_node(node, is_elif_arm=is_elif_arm),
-                base_complexity,
-                node_nesting,
-                nesting_counted,
+                lineno, describe_node(node), base_complexity, node_nesting, nesting_counted
             )
         )
 
     if should_iter_children:
-        # The lone `if` in this node's orelse is the next `elif` arm of the chain.
-        elif_arm = node.orelse[0] if isinstance(node, ast.If) and precedes_elif(node) else None
         for child in ast.iter_child_nodes(node):
-            _collect_breakdown(child, increment_by, lineno, out, child is elif_arm)
+            _collect_breakdown(child, increment_by, lineno, out)
+
+
+def _collect_if_breakdown(
+    node: ast.If,
+    increment_by: int,
+    out: list[Contribution],
+    *,
+    is_elif_arm: bool,
+) -> None:
+    # B1: +1 for the `if`/`elif` itself. B3: a nesting penalty applies to a
+    # leading `if` (the more deeply nested, the costlier) but not to `elif` or
+    # `else`. B2: each branch body is scored one nesting level deeper.
+    penalty = 0 if is_elif_arm else increment_by
+    out.append(
+        Contribution(
+            node.lineno,
+            describe_node(node, is_elif_arm=is_elif_arm),
+            1 + penalty,
+            increment_by,
+            not is_elif_arm,
+        )
+    )
+    body_level = increment_by + 1
+    _collect_breakdown(node.test, increment_by, node.lineno, out)
+    for stmt in node.body:
+        _collect_breakdown(stmt, body_level, node.lineno, out)
+
+    orelse = node.orelse
+    if len(orelse) == 1 and isinstance(orelse[0], ast.If):
+        # `elif`: a sibling at the same nesting level, not a nested `if`.
+        _collect_if_breakdown(orelse[0], increment_by, out, is_elif_arm=True)
+    elif orelse:
+        # `else`: +1, no nesting penalty; its body is scored one level deeper.
+        out.append(Contribution(orelse[0].lineno, "else", 1, increment_by, False))
+        for stmt in orelse:
+            _collect_breakdown(stmt, body_level, node.lineno, out)
