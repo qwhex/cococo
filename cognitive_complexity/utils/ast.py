@@ -50,28 +50,28 @@ def is_elif(node: ast.AST) -> bool:
     return isinstance(node, ast.If) and len(node.orelse) == 1 and isinstance(node.orelse[0], ast.If)
 
 
+# Static node-type -> label dispatch. ``ast.If`` is handled separately because
+# its label depends on whether it is an elif arm, not just its type.
+_NODE_LABELS: tuple[tuple[type[ast.AST] | tuple[type[ast.AST], ...], str], ...] = (
+    (ast.IfExp, "ternary"),
+    ((ast.For, ast.AsyncFor), "for"),
+    (ast.While, "while"),
+    (ast.ExceptHandler, "except"),
+    (ast.Match, "match"),
+    ((ast.FunctionDef, ast.AsyncFunctionDef), "nested-func"),
+    (ast.Lambda, "lambda"),
+    (ast.BoolOp, "bool-op"),
+    (ast.comprehension, "comprehension-if"),
+)
+
+
 def describe_node(node: ast.AST) -> str:
     """Short human label for a scored construct, used in breakdowns."""
     if isinstance(node, ast.If):
         return "elif" if is_elif(node) else "if"
-    if isinstance(node, ast.IfExp):
-        return "ternary"
-    if isinstance(node, (ast.For, ast.AsyncFor)):
-        return "for"
-    if isinstance(node, ast.While):
-        return "while"
-    if isinstance(node, ast.ExceptHandler):
-        return "except"
-    if isinstance(node, ast.Match):
-        return "match"
-    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-        return "nested-func"
-    if isinstance(node, ast.Lambda):
-        return "lambda"
-    if isinstance(node, ast.BoolOp):
-        return "bool-op"
-    if isinstance(node, ast.comprehension):
-        return "comprehension-if"
+    for types, label in _NODE_LABELS:
+        if isinstance(node, types):
+            return label
     return type(node).__name__
 
 

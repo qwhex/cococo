@@ -56,3 +56,11 @@ def test_main_gate_passes_when_within_max(tmp_path):
 
 def test_main_empty_returns_zero(tmp_path):
     assert main([str(tmp_path)]) == 0
+
+
+def test_main_lists_all_functions_worst_first(tmp_path, capsys):
+    # Plain listing mode (no --max): every function is printed, worst first.
+    _write(tmp_path, "m.py", NESTED + FLAT)
+    assert main([str(tmp_path)]) == 0
+    quals = [line.split()[-1] for line in capsys.readouterr().out.splitlines() if line]
+    assert quals == ["f", "g"]  # f (10) ranks above g (0)

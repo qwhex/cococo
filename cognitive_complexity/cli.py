@@ -179,24 +179,29 @@ def main(argv: list[str] | None = None) -> int:
     if not results:
         print("cococo: no Python functions found", file=sys.stderr)
         return 0
+    return _report(results, args.max, args.min)
 
-    threshold = args.max if args.max is not None else args.min
+
+def _report(results: list[tuple[int, Path, int, str]], max_: int | None, min_: int) -> int:
+    """Print the scored functions and, when ``max_`` is set, gate on it."""
+    threshold = max_ if max_ is not None else min_
     shown = sorted(
-        (r for r in results if r[0] > threshold or (args.max is None and r[0] >= args.min)),
+        (r for r in results if r[0] > threshold or (max_ is None and r[0] >= min_)),
         reverse=True,
     )
     for score, path, lineno, qualname in shown:
         print(f"{score:4d}  {path}:{lineno}  {qualname}")
 
-    if args.max is not None:
-        over = [r for r in results if r[0] > args.max]
-        if over:
-            print(
-                f"\ncococo: {len(over)} function(s) exceed cognitive complexity {args.max}",
-                file=sys.stderr,
-            )
-            return 1
-        print(f"cococo: all {len(results)} functions within cognitive complexity {args.max}")
+    if max_ is None:
+        return 0
+    over = [r for r in results if r[0] > max_]
+    if over:
+        print(
+            f"\ncococo: {len(over)} function(s) exceed cognitive complexity {max_}",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"cococo: all {len(results)} functions within cognitive complexity {max_}")
     return 0
 
 

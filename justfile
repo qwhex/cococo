@@ -6,10 +6,11 @@ check: format-check lint typecheck complexity test check-readme
 lint:
     ruff check .
 
-# Gate our own cognitive complexity with cococo (dogfooding). 15 is the
-# canonical Sonar cognitive-complexity ceiling; the worst function today is 12.
+# Gate our own cognitive complexity with cococo (dogfooding). Ratcheted to the
+# current ceiling so no function is allowed to get harder to read than today's
+# worst; tighten it (or refactor) rather than loosen it.
 complexity:
-    python -m cognitive_complexity.cli cognitive_complexity --max 15
+    python -m cognitive_complexity.cli cognitive_complexity --max 10
 
 # Reformat with ruff
 format:
