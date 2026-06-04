@@ -89,6 +89,11 @@ This is not a precise realization of the original algorithm proposed by
 results. The algorithm gives complexity points for breaking control flow,
 nesting, recursion, and stacked logical operations.
 
+**Known limitation:** only *direct* recursion is detected (a function calling
+itself by name, or via `self`/`cls`). Indirect/mutual recursion — `a()` calls
+`b()` calls `a()` — is not counted, since detecting it needs a whole-program
+call graph rather than the single-function AST this tool works from.
+
 ## Development
 
 ```bash

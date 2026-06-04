@@ -6,6 +6,7 @@ from cognitive_complexity.utils.ast import (
     describe_node,
     has_recursive_calls,
     is_decorator,
+    precedes_elif,
     process_child_nodes,
     process_node_itself,
 )
@@ -87,6 +88,7 @@ def _collect_breakdown(
     increment_by: int,
     parent_lineno: int,
     out: list[Contribution],
+    is_elif_arm: bool = False,
 ) -> None:
     nesting_before = increment_by
     increment_by, base_complexity, should_iter_children = process_node_itself(node, increment_by)
@@ -104,7 +106,7 @@ def _collect_breakdown(
         out.append(
             Contribution(
                 lineno,
-                describe_node(node),
+                describe_node(node, is_elif_arm=is_elif_arm),
                 base_complexity,
                 node_nesting,
                 nesting_counted,
@@ -112,5 +114,7 @@ def _collect_breakdown(
         )
 
     if should_iter_children:
+        # The lone `if` in this node's orelse is the next `elif` arm of the chain.
+        elif_arm = node.orelse[0] if isinstance(node, ast.If) and precedes_elif(node) else None
         for child in ast.iter_child_nodes(node):
-            _collect_breakdown(child, increment_by, lineno, out)
+            _collect_breakdown(child, increment_by, lineno, out, child is elif_arm)

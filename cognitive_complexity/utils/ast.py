@@ -15,6 +15,10 @@ def _call_targets_name(call: ast.Call, name: str) -> bool:
 
 
 def has_recursive_calls(funcdef: AnyFuncdef) -> bool:
+    # Direct recursion only: a call by the function's own name, or a
+    # self/cls method call to it. Indirect/mutual recursion (a -> b -> a) is
+    # not detected; that needs a whole-program call graph, out of scope for a
+    # per-function AST metric.
     return any(
         _call_targets_name(node, funcdef.name)
         for node in ast.walk(funcdef)
@@ -41,17 +45,18 @@ def is_decorator(funcdef: AnyFuncdef) -> bool:
     )
 
 
-def is_elif(node: ast.AST) -> bool:
-    """True when an ``ast.If`` is the ``elif`` arm of an enclosing ``if``.
+def precedes_elif(node: ast.AST) -> bool:
+    """True when ``node`` is an ``if`` whose ``else`` branch is itself a lone
+    ``if`` — i.e. it is immediately followed by an ``elif`` clause.
 
-    Single source of truth shared by the label (:func:`describe_node`) and the
-    scoring (:func:`process_control_flow_breaker`) so the two cannot drift.
+    Note this describes the *node's own* shape, not its position: it is the
+    head/middle of an if/elif chain, and ``node.orelse[0]`` is the next arm.
     """
     return isinstance(node, ast.If) and len(node.orelse) == 1 and isinstance(node.orelse[0], ast.If)
 
 
 # Static node-type -> label dispatch. ``ast.If`` is handled separately because
-# its label depends on whether it is an elif arm, not just its type.
+# its label depends on whether it is an elif arm, which is positional.
 _NODE_LABELS: tuple[tuple[type[ast.AST] | tuple[type[ast.AST], ...], str], ...] = (
     (ast.IfExp, "ternary"),
     ((ast.For, ast.AsyncFor), "for"),
@@ -65,10 +70,15 @@ _NODE_LABELS: tuple[tuple[type[ast.AST] | tuple[type[ast.AST], ...], str], ...] 
 )
 
 
-def describe_node(node: ast.AST) -> str:
-    """Short human label for a scored construct, used in breakdowns."""
+def describe_node(node: ast.AST, *, is_elif_arm: bool = False) -> str:
+    """Short human label for a scored construct, used in breakdowns.
+
+    Whether an ``ast.If`` is an ``elif`` depends on its position (is it the
+    ``else`` branch of another ``if``?), which the node cannot know on its own,
+    so the caller supplies ``is_elif_arm``.
+    """
     if isinstance(node, ast.If):
-        return "elif" if is_elif(node) else "if"
+        return "elif" if is_elif_arm else "if"
     for types, label in _NODE_LABELS:
         if isinstance(node, types):
             return label
@@ -95,8 +105,8 @@ def process_control_flow_breaker(
         # C if A else B; ternary operator equivalent
         increment = 0
         increment_by += 1
-    elif is_elif(node):
-        # node is an elif; the increment will be counted on the ast.If
+    elif precedes_elif(node):
+        # chained if/elif: no extra "else" increment here (counted along the chain)
         increment = 0
     elif isinstance(node, ast.ExceptHandler):
         # +1 for the catch/except-handler

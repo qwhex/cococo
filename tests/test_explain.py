@@ -72,7 +72,6 @@ def _write(tmp_path, name, src):
 def test_describe_node_labels_every_construct_kind():
     cases = {
         "if a:\n    pass": "if",
-        "if a:\n    pass\nelif b:\n    pass": "elif",
         "x = a if b else c": "ternary",
         "for x in xs:\n    pass": "for",
         "while a:\n    pass": "while",
@@ -87,6 +86,12 @@ def test_describe_node_labels_every_construct_kind():
         if expected in {"ternary", "lambda", "bool-op"}:
             node = node.value  # type: ignore[attr-defined]
         assert describe_node(node) == expected
+    # Whether an `if` is an `elif` is positional (is it the `else`-branch of
+    # another `if`?), so the caller supplies it. The leading branch is "if"; the
+    # arm in its orelse is "elif".
+    chain = ast.parse("if a:\n    pass\nelif b:\n    pass").body[0]
+    assert describe_node(chain) == "if"
+    assert describe_node(chain.orelse[0], is_elif_arm=True) == "elif"
     # async for is labelled the same as for; except handler; comprehension.
     afor = ast.parse("async def f():\n    async for x in xs:\n        pass").body[0].body[0]
     assert describe_node(afor) == "for"
@@ -96,6 +101,28 @@ def test_describe_node_labels_every_construct_kind():
     assert describe_node(comp) == "comprehension-if"
     # Fallback for any other node kind: its AST class name.
     assert describe_node(ast.parse("x = 1").body[0]) == "Assign"
+
+
+def test_elif_chain_labels_match_source_order():
+    # An if/elif/elif chain is labelled in source order: the leading branch is
+    # "if" and every following branch is "elif". (These used to read backwards
+    # — leading branches mislabelled "elif" and the tail "if".)
+    fd = _funcdef("""
+    def f(a):
+        if a == 1:
+            return 1
+        elif a == 2:
+            return 2
+        elif a == 3:
+            return 3
+    """)
+    breakdown = get_cognitive_complexity_breakdown(fd)
+    assert [(c.label, c.points, c.nesting_counted) for c in breakdown] == [
+        ("if", 1, False),
+        ("elif", 1, False),
+        ("elif", 1, True),
+    ]
+    assert sum(c.points for c in breakdown) == get_cognitive_complexity(fd) == 3
 
 
 # ---- breakdown API -------------------------------------------------------
@@ -214,31 +241,6 @@ def test_rich_function_breakdown_sums_to_total():
 
 
 # ---- documented quirks (characterization) --------------------------------
-
-
-def test_quirk_elif_chain_labels_read_counterintuitively():
-    # DOCUMENTED QUIRK (a): in an if/elif chain the structural increment is
-    # attributed to the *inner* ast.If, so the leading branches get labelled
-    # "elif" (their orelse holds another If) and the increment lands on the
-    # trailing "if". The *labels* read backwards, but the points are correct
-    # and still sum to the total. This pins current behaviour; it is NOT a bug.
-    fd = _funcdef("""
-    def f(a):
-        if a == 1:      # labelled 'elif' (orelse contains an If)
-            return 1
-        elif a == 2:    # labelled 'elif'
-            return 2
-        elif a == 3:    # labelled 'if' (innermost; carries the increment)
-            return 3
-    """)
-    breakdown = get_cognitive_complexity_breakdown(fd)
-    assert [(c.label, c.points, c.nesting_counted) for c in breakdown] == [
-        ("elif", 1, False),
-        ("elif", 1, False),
-        ("if", 1, True),
-    ]
-    # Invariant holds despite the counterintuitive labels.
-    assert sum(c.points for c in breakdown) == get_cognitive_complexity(fd) == 3
 
 
 def test_quirk_comprehension_filters_inherit_ancestor_lineno():
