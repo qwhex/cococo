@@ -40,7 +40,7 @@ def rich(data, n):
         for item in data:                          # +1
             if item > 0:                           # +2
                 result = item if item < n else -item   # ternary +3
-    except ValueError, KeyError:                   # except +1
+    except (ValueError, KeyError):                 # except +1
         return [x for x in data if x]              # comprehension-if +1
 
     def inner(v):                                  # nested-func (no cost itself)
@@ -195,8 +195,7 @@ def test_explain_async_function_through_cli(tmp_path, capsys):
 def test_rich_function_breakdown_sums_to_total():
     # Strong invariant: across a mix of try/except, match, ternary,
     # comprehension, bool-op, and a nested def, the per-construct points must
-    # still sum exactly to the scalar total. `except A, B:` is valid Python
-    # 3.14 (PEP 758).
+    # still sum exactly to the scalar total.
     fd = _funcdef(RICH)
     breakdown = get_cognitive_complexity_breakdown(fd)
     assert sum(c.points for c in breakdown) == get_cognitive_complexity(fd)
