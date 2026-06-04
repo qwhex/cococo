@@ -1,25 +1,24 @@
 #!/usr/bin/env python3
-"""Performance benchmark for the cognitive-complexity library.
+"""Performance benchmark for the cognitive-complexity algorithm.
+
+Times ``get_cognitive_complexity`` in-process over synthetic functions — this
+isolates the algorithm (no pytest/interpreter startup noise) and is the
+sensitive guard against per-node overhead and super-linear blow-ups.
 
 Two modes:
 
-* ``suite`` (default) -- run the full pytest suite N times in fresh
-  subprocesses and report the wall-clock distribution. This is the
-  "run the test suite N times and do stats on them" regression guard:
-  a change that slows the suite shows up as a shift in the distribution.
-  Note that pytest start-up/collection dominates this number, so it is a
-  coarse signal.
+* ``compute`` (default) -- repeatedly score one large function and report the
+  wall-clock distribution (mean/median/stdev/p95) plus per-call time.
 
-* ``compute`` -- time only ``get_cognitive_complexity`` over a large
-  synthetic function, in-process. This isolates the algorithm itself and
-  is the sensitive guard against quadratic blow-ups or per-node overhead.
+* ``sweep`` -- score functions of increasing size and report time *per AST
+  node*. If the algorithm is linear that figure stays flat as the function
+  grows; a rising per-node time signals an accidental O(n^2).
 
-Usage::
+Run from the repo root so the package is importable::
 
-    python benchmarks/run_benchmark.py                  # 20 suite runs
-    python benchmarks/run_benchmark.py -n 50
-    python benchmarks/run_benchmark.py --mode compute -n 200
-    python benchmarks/run_benchmark.py -- -k try        # extra pytest args
+    python -m benchmarks.run_benchmark                       # compute, default size
+    python -m benchmarks.run_benchmark --depth 20 --breadth 400
+    python -m benchmarks.run_benchmark --mode sweep
 """
 
 from __future__ import annotations
@@ -27,34 +26,9 @@ from __future__ import annotations
 import argparse
 import ast
 import statistics
-import subprocess
-import sys
 import time
-from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-
-
-def run_suite_once(pytest_args: list[str]) -> float:
-    """Run the full suite once in a subprocess; return wall-clock seconds."""
-    cmd = [
-        sys.executable,
-        "-m",
-        "pytest",
-        "tests/",
-        "-q",
-        "-p",
-        "no:cacheprovider",
-        *pytest_args,
-    ]
-    start = time.perf_counter()
-    result = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True)
-    elapsed = time.perf_counter() - start
-    if result.returncode != 0:
-        sys.stderr.write(result.stdout)
-        sys.stderr.write(result.stderr)
-        raise SystemExit(f"Test suite failed during benchmark (exit {result.returncode})")
-    return elapsed
+from cognitive_complexity.api import get_cognitive_complexity
 
 
 def _build_large_function(depth: int, breadth: int) -> ast.AST:
@@ -69,14 +43,23 @@ def _build_large_function(depth: int, breadth: int) -> ast.AST:
     return ast.parse("\n".join(lines)).body[0]
 
 
+def _count_nodes(funcdef: ast.AST) -> int:
+    return sum(1 for _ in ast.walk(funcdef))
+
+
 def run_compute_once(funcdef: ast.AST, repeats: int) -> float:
     """Time ``repeats`` scorings of one funcdef in-process; return seconds."""
-    from cognitive_complexity.api import get_cognitive_complexity
-
     start = time.perf_counter()
     for _ in range(repeats):
         get_cognitive_complexity(funcdef)
     return time.perf_counter() - start
+
+
+def _sample(funcdef: ast.AST, repeats: int, runs: int, warmup: int) -> list[float]:
+    """Per-scoring seconds across ``runs`` timed samples (after ``warmup``)."""
+    for _ in range(warmup):
+        run_compute_once(funcdef, repeats)
+    return [run_compute_once(funcdef, repeats) / repeats for _ in range(runs)]
 
 
 def percentile(values: list[float], pct: float) -> float:
@@ -90,60 +73,70 @@ def percentile(values: list[float], pct: float) -> float:
     return ordered[lo] + (ordered[hi] - ordered[lo]) * (k - lo)
 
 
-def summarize(label: str, durations: list[float]) -> dict[str, float]:
-    """Print and return mean/median/stdev/min/max/p95 for a sample (seconds)."""
-    mean = statistics.mean(durations)
+def summarize(label: str, per_call: list[float]) -> dict[str, float]:
+    """Print and return mean/median/stdev/min/max/p95 for per-call seconds."""
+    mean = statistics.mean(per_call)
     stats = {
-        "runs": len(durations),
+        "runs": len(per_call),
         "mean": mean,
-        "median": statistics.median(durations),
-        "stdev": statistics.stdev(durations) if len(durations) > 1 else 0.0,
-        "min": min(durations),
-        "max": max(durations),
-        "p95": percentile(durations, 95),
+        "median": statistics.median(per_call),
+        "stdev": statistics.stdev(per_call) if len(per_call) > 1 else 0.0,
+        "min": min(per_call),
+        "max": max(per_call),
+        "p95": percentile(per_call, 95),
     }
     cv = (stats["stdev"] / mean * 100) if mean else 0.0
     print(f"\n{label} over {stats['runs']} runs:")
-    print(f"  mean   {mean * 1000:9.3f} ms")
-    print(f"  median {stats['median'] * 1000:9.3f} ms")
-    print(f"  stdev  {stats['stdev'] * 1000:9.3f} ms  ({cv:.1f}% CV)")
-    print(f"  min    {stats['min'] * 1000:9.3f} ms")
-    print(f"  max    {stats['max'] * 1000:9.3f} ms")
-    print(f"  p95    {stats['p95'] * 1000:9.3f} ms")
+    print(f"  mean   {mean * 1e6:9.2f} us/call")
+    print(f"  median {stats['median'] * 1e6:9.2f} us/call")
+    print(f"  stdev  {stats['stdev'] * 1e6:9.2f} us/call  ({cv:.1f}% CV)")
+    print(f"  min    {stats['min'] * 1e6:9.2f} us/call")
+    print(f"  p95    {stats['p95'] * 1e6:9.2f} us/call")
     return stats
 
 
-def main(argv: list[str] | None = None) -> dict[str, float]:
+def run_sweep(sizes: list[int], depth: int, repeats: int, runs: int, warmup: int) -> None:
+    """Score functions of growing width; report time per AST node to expose
+    any super-linear scaling (per-node time should stay flat if linear)."""
+    print(f"\nScaling sweep (depth={depth}, median of {runs} runs):")
+    print(f"  {'stmts':>6}  {'nodes':>7}  {'per-call':>11}  {'per-node':>9}")
+    per_node: list[float] = []
+    for breadth in sizes:
+        funcdef = _build_large_function(depth, breadth)
+        nodes = _count_nodes(funcdef)
+        call = statistics.median(_sample(funcdef, repeats, runs, warmup))
+        per_node.append(call / nodes)
+        print(f"  {breadth:>6}  {nodes:>7}  {call * 1e6:>8.2f}us  {call / nodes * 1e6:>7.4f}us")
+    ratio = per_node[-1] / per_node[0] if per_node[0] else 0.0
+    verdict = "≈linear" if ratio < 1.5 else "SUPER-LINEAR — investigate"
+    print(
+        f"\n  per-node {per_node[0] * 1e6:.4f}us -> {per_node[-1] * 1e6:.4f}us "
+        f"({ratio:.2f}x over {sizes[0]}->{sizes[-1]} stmts): {verdict}"
+    )
+
+
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--mode", choices=("suite", "compute"), default="suite")
+    parser.add_argument("--mode", choices=("compute", "sweep"), default="compute")
     parser.add_argument("-n", "--runs", type=int, default=20)
     parser.add_argument("--warmup", type=int, default=1, help="discarded warmup runs")
-    parser.add_argument("--depth", type=int, default=15, help="compute mode: nesting depth")
+    parser.add_argument("--depth", type=int, default=15, help="nesting depth")
     parser.add_argument("--breadth", type=int, default=200, help="compute mode: statements")
-    parser.add_argument("--repeats", type=int, default=1000, help="compute mode: scorings per run")
-    parser.add_argument("pytest_args", nargs="*", help="extra args forwarded to pytest")
+    parser.add_argument("--repeats", type=int, default=1000, help="scorings timed per run")
     args = parser.parse_args(argv)
 
-    if args.mode == "suite":
-        for _ in range(args.warmup):
-            run_suite_once(args.pytest_args)
-        durations = [run_suite_once(args.pytest_args) for _ in range(args.runs)]
-        return summarize("Full-suite wall-clock", durations)
+    if args.mode == "sweep":
+        run_sweep([50, 100, 200, 400, 800], args.depth, args.repeats, args.runs, args.warmup)
+        return
 
     funcdef = _build_large_function(args.depth, args.breadth)
-    for _ in range(args.warmup):
-        run_compute_once(funcdef, args.repeats)
-    durations = [run_compute_once(funcdef, args.repeats) for _ in range(args.runs)]
-    stats = summarize(
-        f"Compute-only ({args.repeats} scorings/run, depth={args.depth}, breadth={args.breadth})",
-        durations,
+    summarize(
+        f"Compute ({args.repeats} scorings/run, depth={args.depth}, breadth={args.breadth})",
+        _sample(funcdef, args.repeats, args.runs, args.warmup),
     )
-    per_call_us = stats["mean"] / args.repeats * 1e6
-    print(f"  -> {per_call_us:.2f} us per get_cognitive_complexity() call")
-    return stats
 
 
 if __name__ == "__main__":

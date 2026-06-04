@@ -37,6 +37,6 @@ install-hooks:
     git config core.hooksPath .githooks
     @echo "Installed: pre-push now runs 'just check' (bypass with 'git push --no-verify')"
 
-# Run the performance benchmark. Pass extra args, e.g. `just bench --mode compute -n 200`
+# Run the performance benchmark. Pass extra args, e.g. `just bench --mode sweep`
 bench *args:
-    python benchmarks/run_benchmark.py {{args}}
+    python -m benchmarks.run_benchmark {{args}}
