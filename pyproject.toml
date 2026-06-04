@@ -3,6 +3,13 @@
 # lives in setup.py. Ruleset copied from ../../pyproject.toml; target-version is
 # py310 here (the fork's minimum) rather than py314.
 
+# Declared explicitly so that adding this pyproject.toml does not change the
+# build from the setuptools default it used before (setup.py still holds the
+# project metadata).
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
 [tool.pytest.ini_options]
 # Anchors the rootdir here so pytest does not climb into the parent
 # data_pipeline tree and load its conftest. The 100% coverage floor is enforced

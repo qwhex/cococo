@@ -6,7 +6,7 @@ from setuptools import find_packages, setup
 def get_version() -> str | None:
     for line in Path("cognitive_complexity/__init__.py").read_text().splitlines():
         if line.startswith("__version__"):
-            return line.split("=")[-1].strip().strip("'")
+            return line.split("=")[-1].strip().strip("\"'")
     return None
 
 
@@ -38,7 +38,7 @@ setup(
     packages=find_packages(),
     python_requires=">=3.10",
     include_package_data=True,
-    keywords="cognitive-complexity cli flake8 cococo",
+    keywords="cognitive-complexity cli complexity cococo",
     version=get_version(),
     author="Mice Pápai",
     author_email="hello@micepapai.com",
