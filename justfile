@@ -1,10 +1,15 @@
 # `just check` is the single gate: CI runs it (see .github/workflows/ci.yml)
 # and the pre-push hook runs it locally (see `just install-hooks`).
-check: format-check lint typecheck test check-readme
+check: format-check lint typecheck complexity test check-readme
 
 # Lint with ruff (ruleset mirrors the parent cosmetix data_pipeline)
 lint:
     ruff check .
+
+# Gate our own cognitive complexity with cococo (dogfooding). 15 is the
+# canonical Sonar cognitive-complexity ceiling; the worst function today is 12.
+complexity:
+    python -m cognitive_complexity.cli cognitive_complexity --max 15
 
 # Reformat with ruff
 format:

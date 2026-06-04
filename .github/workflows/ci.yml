@@ -26,5 +26,5 @@ jobs:
           pip install -r requirements_dev.txt
           gem install mdl
       # Single gate, identical to the local pre-push hook (`just install-hooks`).
-      - name: Lint, type-check, test, readme lint
+      - name: Format, lint, type-check, complexity, test, readme lint
         run: just check
