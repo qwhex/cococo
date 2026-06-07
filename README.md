@@ -29,10 +29,54 @@ package.
 cococo src/                  # score every function, worst first
 cococo src/ --max 20         # gate: exit non-zero if any function exceeds 20
 cococo a.py b.py --min 10    # only show functions scoring >= 10
+cococo src/ --max 20 --json  # machine-readable report for a pipeline
+cococo src/ --fix            # apply safe guard-clause rewrites in place
 ```
 
 `cococo` scores every module-level function and method; nested functions are
 folded into their enclosing function's score.
+
+### Refactor suggestions on a failing gate
+
+When `--max` is exceeded, each offending function is reported on stderr together
+with a few concrete, mechanical refactors and an estimated complexity drop — so
+a human (or an agent) reading the failure knows what to do next:
+
+```text
+cococo: 1 function(s) exceed cognitive complexity 5
+  src/load.py:42 load = 14 (>5)
+    - Extract this block into a helper function (lines 50-61, ~-7 -> 7)
+    - Flatten nested block with a guard clause (lines 45-61, ~-3 -> 11) [--fix]
+```
+
+Suggestions tagged `[--fix]` can be applied automatically. `--fix` rewrites only
+transforms it can prove keep behavior identical (an `if` with no `else` that is
+the last statement of a function or loop body becomes an early
+`return`/`continue` guard, de-indenting its body); anything else is left
+untouched, and comments/formatting in the moved body are preserved.
+
+### JSON output
+
+`--json` emits the same scores, per-construct breakdowns, and suggestions as a
+single JSON document on stdout (exit code still gates on `--max`), so cococo
+drops into a pipeline:
+
+```bash
+cococo src/ --max 20 --json | jq '.functions[] | select(.over)'
+```
+
+### Library
+
+The suggestion engine is importable too:
+
+```python
+from cognitive_complexity.api import get_cognitive_complexity_breakdown
+from cognitive_complexity.refactor import suggest_refactors
+
+breakdown = get_cognitive_complexity_breakdown(funcdef)
+for s in suggest_refactors(funcdef, breakdown):
+    print(s.title, s.estimated_reduction)
+```
 
 ### Library
 
@@ -60,7 +104,9 @@ This fork diverges from `Melevir/cognitive_complexity` 1.3.0:
   only bare-name recursion.
 - the decorator/closure heuristic is tightened to require the inner function to
   be returned *by name*.
-- a **`cococo` command-line interface**.
+- a **`cococo` command-line interface**, with **heuristic refactor suggestions**
+  on a failing gate, a **`--json`** report for pipelines, and a **`--fix`** flag
+  that applies provably safe guard-clause rewrites.
 - **Python 3.10+** only; type hints and packaging modernized.
 
 The core control-flow scoring (Campbell's rules) is unchanged — it is the

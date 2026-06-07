@@ -2,14 +2,17 @@
 
 Scores every function and method in the given Python files/directories with
 :func:`cognitive_complexity.api.get_cognitive_complexity` and prints them
-worst-first. With ``--max`` it doubles as a gate: it exits non-zero (and prints
-only the offenders) when any function exceeds the ceiling.
+worst-first. With ``--max`` it doubles as a gate: it exits non-zero when any
+function exceeds the ceiling, reporting each offender with concrete refactor
+suggestions.
 
 Usage::
 
     cococo src/                  # list every function, worst first
-    cococo src/ --max 20         # gate: fail if any function exceeds 20
+    cococo src/ --max 20         # gate: fail (with suggestions) above 20
     cococo a.py b.py --min 10    # only show functions scoring >= 10
+    cococo src/ --max 20 --json  # machine-readable report for a pipeline
+    cococo src/ --fix            # apply safe guard-clause rewrites in place
     cococo --explain a.py::Klass.method   # break down one function
     cococo --explain a.py:42              # ...by line number
 """
@@ -27,6 +30,10 @@ from cognitive_complexity.api import (
     get_cognitive_complexity,
     get_cognitive_complexity_breakdown,
 )
+from cognitive_complexity.autofix import fix_source
+from cognitive_complexity.common_types import ScoredFunction
+from cognitive_complexity.refactor import suggest_refactors
+from cognitive_complexity.report import build_report, to_json
 
 AnyFunc = ast.FunctionDef | ast.AsyncFunctionDef
 
@@ -54,9 +61,9 @@ def _collect(
             _collect(child, qualifier, inside_func, out)
 
 
-def score_paths(paths: list[str]) -> list[tuple[int, Path, int, str]]:
-    """Return (score, path, lineno, qualname) for every function found."""
-    results: list[tuple[int, Path, int, str]] = []
+def scored_functions(paths: list[str]) -> list[ScoredFunction]:
+    """Score every function found under ``paths``, keeping its AST node."""
+    results: list[ScoredFunction] = []
     for path in iter_python_files(paths):
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -65,8 +72,14 @@ def score_paths(paths: list[str]) -> list[tuple[int, Path, int, str]]:
         funcs: list[tuple[AnyFunc, str]] = []
         _collect(tree, "", False, funcs)
         for funcdef, qualname in funcs:
-            results.append((get_cognitive_complexity(funcdef), path, funcdef.lineno, qualname))
+            score = get_cognitive_complexity(funcdef)
+            results.append(ScoredFunction(score, path, funcdef.lineno, qualname, funcdef))
     return results
+
+
+def score_paths(paths: list[str]) -> list[tuple[int, Path, int, str]]:
+    """Return (score, path, lineno, qualname) for every function found."""
+    return [(f.score, f.path, f.lineno, f.qualname) for f in scored_functions(paths)]
 
 
 def _parse_target(target: str) -> tuple[Path, str | None, int | None]:
@@ -168,6 +181,17 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="break down one function: FILE.py::qualname, FILE.py:LINE, or FILE.py",
     )
+    parser.add_argument(
+        "--json",
+        dest="as_json",
+        action="store_true",
+        help="emit a machine-readable JSON report to stdout (for pipelines)",
+    )
+    parser.add_argument(
+        "--fix",
+        action="store_true",
+        help="apply safe guard-clause rewrites in place before reporting",
+    )
     args = parser.parse_args(argv)
 
     if args.explain is not None:
@@ -175,34 +199,91 @@ def main(argv: list[str] | None = None) -> int:
     if not args.paths:
         parser.error("the following arguments are required: paths (or use --explain)")
 
-    results = score_paths(args.paths)
-    if not results:
+    if args.fix:
+        _apply_fixes(args.paths)
+
+    functions = scored_functions(args.paths)
+    if not functions:
         print("cococo: no Python functions found", file=sys.stderr)
         return 0
-    return _report(results, args.max, args.min)
+    if args.as_json:
+        return _report_json(functions, args.max, args.min)
+    return _report(functions, args.max, args.min)
 
 
-def _report(results: list[tuple[int, Path, int, str]], max_: int | None, min_: int) -> int:
-    """Print the scored functions and, when ``max_`` is set, gate on it."""
+def _shown(functions: list[ScoredFunction], max_: int | None, min_: int) -> list[ScoredFunction]:
     threshold = max_ if max_ is not None else min_
-    shown = sorted(
-        (r for r in results if r[0] > threshold or (max_ is None and r[0] >= min_)),
+    return sorted(
+        (f for f in functions if f.score > threshold or (max_ is None and f.score >= min_)),
+        key=lambda f: f.score,
         reverse=True,
     )
-    for score, path, lineno, qualname in shown:
-        print(f"{score:4d}  {path}:{lineno}  {qualname}")
+
+
+def _apply_fixes(paths: list[str]) -> None:
+    """Rewrite safe guard-clause patterns in place, reporting a one-line summary."""
+    changed = 0
+    applied = 0
+    for path in iter_python_files(paths):
+        try:
+            source = path.read_text(encoding="utf-8")
+            new_source, count = fix_source(source)
+        except (OSError, UnicodeDecodeError, SyntaxError):
+            continue
+        if count:
+            path.write_text(new_source, encoding="utf-8")
+            changed += 1
+            applied += count
+    print(
+        f"cococo: applied {applied} guard-clause fix(es) across {changed} file(s)",
+        file=sys.stderr,
+    )
+
+
+def _report(functions: list[ScoredFunction], max_: int | None, min_: int) -> int:
+    """Print the scored functions and, when ``max_`` is set, gate on it."""
+    for f in _shown(functions, max_, min_):
+        print(f"{f.score:4d}  {f.path}:{f.lineno}  {f.qualname}")
 
     if max_ is None:
         return 0
-    over = [r for r in results if r[0] > max_]
+    over = [f for f in functions if f.score > max_]
     if over:
+        _print_gate_failure(over, max_)
+        return 1
+    print(f"cococo: all {len(functions)} functions within cognitive complexity {max_}")
+    return 0
+
+
+def _report_json(functions: list[ScoredFunction], max_: int | None, min_: int) -> int:
+    report = build_report(_shown(functions, max_, min_), max_, min_)
+    print(to_json(report))
+    return 1 if max_ is not None and report["exceeded"] else 0
+
+
+def _print_gate_failure(over: list[ScoredFunction], max_: int) -> None:
+    print(
+        f"\ncococo: {len(over)} function(s) exceed cognitive complexity {max_}",
+        file=sys.stderr,
+    )
+    for f in sorted(over, key=lambda f: f.score, reverse=True):
+        _print_suggestions(f, max_)
+
+
+def _print_suggestions(f: ScoredFunction, max_: int) -> None:
+    suggestions = suggest_refactors(f.funcdef, get_cognitive_complexity_breakdown(f.funcdef))
+    print(f"  {f.path}:{f.lineno} {f.qualname} = {f.score} (>{max_})", file=sys.stderr)
+    if not suggestions:
+        print("    (no mechanical refactor found; split it by responsibility)", file=sys.stderr)
+        return
+    for s in suggestions:
+        fix = " [--fix]" if s.autofixable else ""
         print(
-            f"\ncococo: {len(over)} function(s) exceed cognitive complexity {max_}",
+            f"    - {s.title} "
+            f"(lines {s.line_start}-{s.line_end}, ~-{s.estimated_reduction} "
+            f"-> {s.estimated_complexity_after}){fix}",
             file=sys.stderr,
         )
-        return 1
-    print(f"cococo: all {len(results)} functions within cognitive complexity {max_}")
-    return 0
 
 
 if __name__ == "__main__":  # pragma: no cover
