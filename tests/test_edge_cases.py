@@ -88,50 +88,52 @@ def test_async_with_adds_nothing():
 # --------------------------------------------------------------------------
 
 
-def test_decorator_is_scored_by_inner_function():
-    # body is [inner def, return inner]; scored by inner at nesting 0.
+def test_decorator_factory_own_score_excludes_inner():
+    # A decorator's body is [inner def, return inner]; the inner is its own unit,
+    # so the decorator's own score is 0. (No more `is_decorator` special case —
+    # this is just the general "named nested defs aren't folded" rule.)
     assert (
         get_code_snippet_complexity("""
     def a_decorator(a, b):
         def inner(func):
-            if condition:  # +1
+            if condition:  # belongs to inner
                 print(b)
             func()
         return inner
     """)
-        == 1
+        == 0
     )
 
 
-def test_inner_def_returning_constant_is_not_a_decorator():
-    # Returns a constant, not the inner function, so the inner def is a real
-    # nested function: def (+1 nesting) then `if x` at nesting 1 (+2) -> 2.
+def test_factory_returning_constant_also_excludes_inner():
+    # Whether the outer returns the inner function or a constant no longer
+    # matters: the named nested def is always its own unit, so `f`'s own score
+    # is 0 either way.
     assert (
         get_code_snippet_complexity("""
     def f(a):
         def g(x):
-            if x:        # +2 (nested function body)
+            if x:        # belongs to g
                 return 1
         return 42
     """)
-        == 2
+        == 0
     )
 
 
-def test_closure_factory_is_indistinguishable_from_decorator():
-    # A value-returning closure factory is structurally identical to a
-    # decorator (returns its inner function by name), so it is scored the
-    # same way -- by the inner function. Documented limitation.
+def test_closure_factory_own_score_excludes_inner():
+    # A value-returning closure factory: `make_adder`'s own score is 0, and
+    # `add` is scored separately on its own merits.
     assert (
         get_code_snippet_complexity("""
     def make_adder(n):
         def add(x):
-            if x:        # +1
+            if x:        # belongs to add
                 return x + n
             return n
         return add
     """)
-        == 1
+        == 0
     )
 
 

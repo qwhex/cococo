@@ -33,8 +33,16 @@ cococo src/ --max 20 --json  # machine-readable report for a pipeline
 cococo src/ --fix            # apply safe guard-clause rewrites in place
 ```
 
-`cococo` scores every module-level function and method; nested functions are
-folded into their enclosing function's score.
+`cococo` scores every function, method, and **named nested function** as its own
+unit — a nested `def` is reported on its own row with a qualified name
+(`outer.<locals>.inner`, `Klass.method.<locals>.helper`), scored from nesting
+level 0, not folded into the function that encloses it. This keeps factory and
+registry shapes (FastAPI/Flask app factories, decorator factories, dispatch
+tables of closures) honest: the trivial outer function scores low and each inner
+handler is judged on its own merits. Lambdas, being anonymous, still fold into
+their enclosing function. See
+[docs/nested-function-scoring.md](docs/nested-function-scoring.md) for the
+rationale.
 
 ### Refactor suggestions on a failing gate
 
@@ -102,8 +110,11 @@ This fork diverges from `Melevir/cognitive_complexity` 1.3.0:
 - **comprehension `if` filters** each count as a decision point.
 - **method recursion** (`self.method(...)` / `cls.method(...)`) is detected, not
   only bare-name recursion.
-- the decorator/closure heuristic is tightened to require the inner function to
-  be returned *by name*.
+- **named nested functions are scored as their own units** (reported as
+  `outer.<locals>.inner`), not folded into the enclosing function; lambdas still
+  fold. This removes the per-containment nesting surcharge on factory/registry
+  code and the old `is_decorator` special case. See
+  [docs/nested-function-scoring.md](docs/nested-function-scoring.md).
 - a **`cococo` command-line interface**, with **heuristic refactor suggestions**
   on a failing gate, a **`--json`** report for pipelines, and a **`--fix`** flag
   that applies provably safe guard-clause rewrites.

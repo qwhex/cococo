@@ -33,7 +33,7 @@ async def stream(items):
 """
 
 # A structurally rich function exercising try/except, match, ternary,
-# comprehension filter, bool-op, and a nested def in one place.
+# comprehension filter, bool-op, and a while loop in its own scope.
 RICH = """
 def rich(data, n):
     try:
@@ -43,16 +43,15 @@ def rich(data, n):
     except (ValueError, KeyError):                 # except +1
         return [x for x in data if x]              # comprehension-if +1
 
-    def inner(v):                                  # nested-func (no cost itself)
-        while v and v > 0:                         # while +2, bool-op +1
-            v -= 1
-        return v
+    v = n
+    while v and v > 0:                             # while +1, bool-op +1
+        v -= 1
 
     match n:                                       # match +1
         case 0:
             return 0
         case _:
-            return inner(n)
+            return v
 """
 
 
@@ -76,7 +75,6 @@ def test_describe_node_labels_every_construct_kind():
         "for x in xs:\n    pass": "for",
         "while a:\n    pass": "while",
         "match a:\n    case _:\n        pass": "match",
-        "def inner():\n    pass": "nested-func",
         "f = lambda x: x": "lambda",
         "x = a and b": "bool-op",
     }
@@ -159,21 +157,21 @@ def test_breakdown_bool_op_has_no_nesting_penalty():
     assert boolop.nesting_counted is False
 
 
-def test_breakdown_scores_decorator_by_inner_function():
-    # Mirrors the scalar API: a decorator/closure factory is unwrapped and
-    # scored by its inner function, and the per-construct points still sum to
-    # the scalar total.
+def test_breakdown_excludes_nested_defs_from_the_parent():
+    # Named nested defs are not folded into the enclosing function's breakdown:
+    # `a_decorator`'s own breakdown is empty (define inner, return inner), and
+    # the `if condition` belongs to `inner`, scored as its own unit.
     fd = _funcdef("""
     def a_decorator(a, b):
         def inner(func):
-            if condition:   # +1
+            if condition:
                 print(b)
             func()
         return inner
     """)
     breakdown = get_cognitive_complexity_breakdown(fd)
-    assert [(c.label, c.points, c.nesting) for c in breakdown] == [("if", 1, 0)]
-    assert sum(c.points for c in breakdown) == get_cognitive_complexity(fd) == 1
+    assert breakdown == []
+    assert sum(c.points for c in breakdown) == get_cognitive_complexity(fd) == 0
 
 
 def test_breakdown_counts_recursion():

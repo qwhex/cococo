@@ -1,3 +1,4 @@
+import ast
 import json
 
 from cognitive_complexity.cli import main, score_paths
@@ -152,3 +153,90 @@ def test_fix_skips_unparseable_files_without_crashing(tmp_path, capsys):
     _write(tmp_path, "bad.py", "def f(:\n    pass\n")
     assert main([str(tmp_path), "--fix", "--min", "0"]) == 0
     assert "applied 0 guard-clause fix(es)" in capsys.readouterr().err
+
+
+# --- Option A: named nested functions are scored as their own units ---
+
+NESTED_FACTORY = """
+def create_app():
+    app = make()
+
+    def handler_a(x):
+        if x > 0:
+            for i in range(x):
+                if i % 2:
+                    log(i)
+        return x
+
+    def handler_b(x):
+        if x < 0:
+            return -x
+        return x
+
+    return app
+"""
+
+METHOD_LOCAL = """
+class K:
+    def m(self, xs):
+        def inner(x):
+            if x:
+                return 1
+        return inner
+"""
+
+NESTED_RECURSION = """
+def outer(n):
+    def rec(k):
+        return rec(k - 1)
+    return rec(n)
+"""
+
+
+def test_nested_defs_reported_as_own_units(tmp_path):
+    _write(tmp_path, "m.py", NESTED_FACTORY)
+    scores = {q: s for s, _, _, q in score_paths([str(tmp_path)])}
+    # The factory itself is trivial; each handler is scored on its own merits,
+    # from nesting 0 (no containment surcharge).
+    assert scores["create_app"] == 0
+    assert scores["create_app.<locals>.handler_a"] == 6
+    assert scores["create_app.<locals>.handler_b"] == 1
+
+
+def test_method_local_nested_def_keeps_class_in_qualname(tmp_path):
+    _write(tmp_path, "m.py", METHOD_LOCAL)
+    quals = {q for _, _, _, q in score_paths([str(tmp_path)])}
+    assert "K.m" in quals
+    assert "K.m.<locals>.inner" in quals
+
+
+def test_lambda_still_folds_into_parent(tmp_path):
+    # Lambdas are anonymous and keep folding: the `x and x` bool-op counts toward
+    # `f`, and no separate lambda unit is reported.
+    _write(tmp_path, "m.py", "def f(a):\n    g = lambda x: x and x\n    return g(a)\n")
+    scores = {q: s for s, _, _, q in score_paths([str(tmp_path)])}
+    assert scores == {"f": 1}
+
+
+def test_nested_recursion_scored_in_nested_unit_not_outer(tmp_path):
+    _write(tmp_path, "m.py", NESTED_RECURSION)
+    scores = {q: s for s, _, _, q in score_paths([str(tmp_path)])}
+    assert scores["outer.<locals>.rec"] == 1  # rec calls itself
+    assert scores["outer"] == 0  # outer's call to rec is not outer-recursion
+
+
+def test_explain_resolves_nested_def_by_qualname(tmp_path, capsys):
+    p = _write(tmp_path, "m.py", NESTED_FACTORY)
+    assert main(["--explain", f"{p}::create_app.<locals>.handler_a"]) == 0
+    assert "cognitive complexity = 6" in capsys.readouterr().out
+
+
+def test_explain_resolves_nested_def_by_line(tmp_path, capsys):
+    p = _write(tmp_path, "m.py", NESTED_FACTORY)
+    line = next(
+        n.lineno
+        for n in ast.walk(ast.parse(NESTED_FACTORY))
+        if isinstance(n, ast.FunctionDef) and n.name == "handler_a"
+    )
+    assert main(["--explain", f"{p}:{line}"]) == 0
+    assert "handler_a" in capsys.readouterr().out

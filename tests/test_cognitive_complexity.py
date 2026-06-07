@@ -243,16 +243,19 @@ def test_break_and_continue():
 
 
 def test_nested_functions():
+    # Named nested defs are scored as their own units, not folded into `f`. So
+    # `f`'s own score is just the lambda's `b or 2` bool-op (+1); the `if a`
+    # inside `foo` belongs to `foo`, not `f`. (Lambdas still fold.)
     assert (
         get_code_snippet_complexity("""
     def f(a):
         def foo(a):
-            if a:  # +2
+            if a:  # belongs to foo, not f
                 return 1
-        bar = lambda a: lambda b: b or 2  # +1
+        bar = lambda a: lambda b: b or 2  # +1 (lambdas fold)
         return bar(foo(a))(a)
     """)
-        == 3
+        == 1
     )
 
 
@@ -347,46 +350,52 @@ def test_while_else_complexity():
     )
 
 
-def test_a_decorator_complexity():
+def test_decorator_factory_own_score_excludes_inner():
+    # A decorator factory's own body is just "define inner, return inner", so its
+    # own score is 0. The `if condition` belongs to `inner`, scored as its own
+    # unit (see tests/test_cli.py for the per-unit reporting).
     assert (
         get_code_snippet_complexity("""
     def a_decorator(a, b):
-        def inner(func):  # nesting = 0
-            if condition:  # +1
+        def inner(func):
+            if condition:  # belongs to inner, not a_decorator
                 print(b)
             func()
         return inner
     """)
-        == 1
+        == 0
     )
 
 
-def test_not_a_decorator_complexity():
+def test_function_with_an_inline_helper_excludes_the_helper():
+    # The helper `inner` is a separate unit; the enclosing function's own score
+    # excludes it (here: 0, just an assignment and a return).
     assert (
         get_code_snippet_complexity("""
     def not_a_decorator(a, b):
         my_var = a*b
-        def inner(func):  # nesting = 1
-            if condition:  # +1 structure, +1 nesting
+        def inner(func):
+            if condition:  # belongs to inner
                 print(b)
             func()
         return inner
     """)
-        == 2
+        == 0
     )
 
 
-def test_decorator_generator_complexity():
+def test_deeply_nested_factory_own_score_is_zero():
+    # Each named def is its own unit; the outer factory only defines and returns.
     assert (
         get_code_snippet_complexity("""
     def decorator_generator(a):
         def generator(func):
-            def decorator(func): # nesting = 0
-                if condition: # +1
+            def decorator(func):
+                if condition:  # belongs to the innermost decorator
                     print(b)
                 return func()
             return decorator
         return generator
     """)
-        == 1
+        == 0
     )

@@ -47,18 +47,25 @@ def iter_python_files(paths: list[str]) -> Iterator[Path]:
             yield path
 
 
-def _collect(
-    node: ast.AST, qualifier: str, inside_func: bool, out: list[tuple[AnyFunc, str]]
-) -> None:
-    """Top-level functions and methods; nested defs fold into their enclosing score."""
+def _collect(node: ast.AST, qualifier: str, out: list[tuple[AnyFunc, str]]) -> None:
+    """Every function, method, and named nested function, each as its own unit.
+
+    ``qualifier`` is the enclosing-name prefix threaded down the recursion: a
+    class extends it with ``Klass.`` and a named def extends it with
+    ``name.<locals>.`` before recursing, so nested defs report as
+    ``outer.<locals>.inner`` and method-local defs keep the class
+    (``Klass.method.<locals>.inner``). Nested functions are scored as their own
+    units, not folded into the enclosing function (see ``api``).
+    """
     for child in ast.iter_child_nodes(node):
         if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if not inside_func:
-                out.append((child, f"{qualifier}{child.name}"))
+            qualname = f"{qualifier}{child.name}"
+            out.append((child, qualname))
+            _collect(child, f"{qualname}.<locals>.", out)
         elif isinstance(child, ast.ClassDef):
-            _collect(child, f"{qualifier}{child.name}.", False, out)
+            _collect(child, f"{qualifier}{child.name}.", out)
         else:
-            _collect(child, qualifier, inside_func, out)
+            _collect(child, qualifier, out)
 
 
 def scored_functions(paths: list[str]) -> list[ScoredFunction]:
@@ -70,7 +77,7 @@ def scored_functions(paths: list[str]) -> list[ScoredFunction]:
         except (SyntaxError, UnicodeDecodeError):
             continue
         funcs: list[tuple[AnyFunc, str]] = []
-        _collect(tree, "", False, funcs)
+        _collect(tree, "", funcs)
         for funcdef, qualname in funcs:
             score = get_cognitive_complexity(funcdef)
             results.append(ScoredFunction(score, path, funcdef.lineno, qualname, funcdef))
@@ -108,7 +115,7 @@ def _find_function(
     """
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     funcs: list[tuple[AnyFunc, str]] = []
-    _collect(tree, "", False, funcs)
+    _collect(tree, "", funcs)
     if not funcs:
         raise LookupError(f"no functions found in {path}")
     if qualname is not None:

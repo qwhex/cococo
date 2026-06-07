@@ -25,34 +25,16 @@ def has_recursive_calls(funcdef: AnyFuncdef) -> bool:
     )
 
 
-def _returns_name(stmt: ast.stmt, name: str) -> bool:
-    return (
-        isinstance(stmt, ast.Return) and isinstance(stmt.value, ast.Name) and stmt.value.id == name
-    )
-
-
-def is_decorator(funcdef: AnyFuncdef) -> bool:
-    # Defines a single inner function and returns *that function by name*.
-    # A decorator and a value-returning closure factory are structurally
-    # identical, so both are scored by their inner function. Returning anything
-    # other than the inner function (e.g. a constant) is not this pattern.
-    return (
-        isinstance(funcdef, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and len(funcdef.body) == 2
-        and isinstance(funcdef.body[0], (ast.FunctionDef, ast.AsyncFunctionDef))
-        and _returns_name(funcdef.body[1], funcdef.body[0].name)
-    )
-
-
 # Static node-type -> label dispatch. ``ast.If`` is handled separately because
-# its label depends on whether it is an elif arm, which is positional.
+# its label depends on whether it is an elif arm, which is positional. Named
+# nested ``def``s are not here: they are scored as their own reporting units, not
+# as a construct of the enclosing function (see ``api._collect_breakdown``).
 _NODE_LABELS: tuple[tuple[type[ast.AST] | tuple[type[ast.AST], ...], str], ...] = (
     (ast.IfExp, "ternary"),
     ((ast.For, ast.AsyncFor), "for"),
     (ast.While, "while"),
     (ast.ExceptHandler, "except"),
     (ast.Match, "match"),
-    ((ast.FunctionDef, ast.AsyncFunctionDef), "nested-func"),
     (ast.Lambda, "lambda"),
     (ast.BoolOp, "bool-op"),
     (ast.comprehension, "comprehension-if"),
@@ -117,11 +99,9 @@ def process_node_itself(
         ast.ExceptHandler,
         ast.Match,
     )
-    incrementers_nodes = (
-        ast.FunctionDef,
-        ast.AsyncFunctionDef,
-        ast.Lambda,
-    )
+    # Only lambdas add a nesting level to the enclosing function. Named nested
+    # `def`s are scored as their own units and never reach here (api skips them).
+    incrementers_nodes = (ast.Lambda,)
 
     if isinstance(node, control_flow_breakers):
         return process_control_flow_breaker(node, increment_by)

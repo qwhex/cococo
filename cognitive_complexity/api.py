@@ -5,7 +5,6 @@ from cognitive_complexity.common_types import AnyFuncdef
 from cognitive_complexity.utils.ast import (
     describe_node,
     has_recursive_calls,
-    is_decorator,
     process_node_itself,
 )
 
@@ -43,11 +42,9 @@ def get_cognitive_complexity_breakdown(funcdef: AnyFuncdef) -> list[Contribution
     Records every construct that contributed points and the nesting level in
     effect at that point. Recursive calls add a trailing synthetic entry. The
     ``points`` column sums to the total returned by
-    :func:`get_cognitive_complexity`.
+    :func:`get_cognitive_complexity`. Named nested functions are *not* folded in
+    — they are scored as their own units (see :func:`_collect_breakdown`).
     """
-    if is_decorator(funcdef):
-        return get_cognitive_complexity_breakdown(funcdef.body[0])  # type: ignore
-
     contributions: list[Contribution] = []
     for node in funcdef.body:
         _collect_breakdown(node, 0, funcdef.lineno, contributions)
@@ -62,6 +59,13 @@ def _collect_breakdown(
     parent_lineno: int,
     out: list[Contribution],
 ) -> None:
+    # A named nested function is its own reporting unit (discovered separately by
+    # the CLI and scored from nesting level 0). It contributes nothing to the
+    # enclosing function and the walk does not descend into it. Lambdas are
+    # anonymous and still fold (handled by process_node_itself).
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return
+
     # `if`/`elif`/`else` chains need their body and orelse scored at different
     # nesting levels (the body nests one deeper; a trailing `elif` is a sibling
     # at the same level), which the uniform child walk below cannot express —
