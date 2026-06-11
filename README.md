@@ -92,6 +92,20 @@ ways to grandfather existing offenders rather than be all-or-nothing:
   a team adopt the gate against a dirty tree in one commit and ratchet down from
   there. Commit the baseline file; delete it to re-baseline.
 
+### Exit codes
+
+In gate mode (`--max`), the exit code distinguishes the outcomes a CI step cares
+about:
+
+- **0** — all functions within the ceiling (or, without `--max`, a successful
+  listing).
+- **1** — one or more functions exceed the ceiling (offenders printed with
+  suggestions).
+- **2** — the gate could not be trusted: no functions were scanned (a typo'd or
+  empty path), a file was skipped (unreadable, unparseable, or too deeply nested
+  to score), or a `--fix` write failed. A `2` means "fix the setup", not "code is
+  too complex".
+
 ### JSON output
 
 `--json` emits the same scores, per-construct breakdowns, and suggestions as a
@@ -155,7 +169,8 @@ This fork diverges from `Melevir/cognitive_complexity` 1.3.0:
 - **named nested functions are scored as their own units** (reported as
   `outer.<locals>.inner`), not folded into the enclosing function; lambdas still
   fold. This removes the per-containment nesting surcharge on factory/registry
-  code and the old `is_decorator` special case. See
+  code and the old `is_decorator` special case — both still available via
+  `--nested=fold` for pre-2.0.0 compatibility. See
   [docs/nested-function-scoring.md](docs/nested-function-scoring.md).
 - a **`cococo` command-line interface**, with **heuristic refactor suggestions**
   on a failing gate, a **`--json`** report for pipelines, and a **`--fix`** flag

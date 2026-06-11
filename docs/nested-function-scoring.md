@@ -1,8 +1,9 @@
 # Spec: how cococo should score nested functions
 
 **Status:** Implemented in `2.0.0`
-**Affects:** core scoring (`cognitive_complexity/api.py`, `cognitive_complexity/utils/ast.py`), function discovery (`cognitive_complexity/cli.py`), and reported output
+**Affects:** core scoring (`cognitive_complexity/api.py`, `cognitive_complexity/utils/ast.py`), function discovery (`cognitive_complexity/discovery.py`), and reported output
 **Version:** `2.0.0` (breaking change to reported numbers)
+**Compatibility:** the pre-2.0.0 folding behavior this spec replaces (called "today" / "folded" below) remains available via `cococo --nested=fold` or `get_cognitive_complexity(funcdef, fold_nested=True)`, added in `3.0.0` as a migration aid.
 
 ---
 
@@ -390,8 +391,8 @@ folding), then make the §5 changes.
   each handler on its own row at its standalone score; a function with one inline
   helper; deeply nested closures (qualname composition); a lambda-heavy function
   (assert lambdas still fold).
-- **Discovery:** assert `score_paths` / `scored_functions` now return nested
-  units with composed qualnames, and that `--explain outer.<locals>.inner` and
+- **Discovery:** assert `discovery.scored_functions` now returns nested units
+  with composed qualnames, and that `--explain outer.<locals>.inner` and
   `--explain file.py:LINE` both resolve them.
 - **Property (two independently checkable invariants, not a residual equation).**
   Defining the surcharge as `old − new` would make any equality tautological, so

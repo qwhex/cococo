@@ -13,8 +13,15 @@ Usage::
     cococo a.py b.py --min 10    # only show functions scoring >= 10
     cococo src/ --max 20 --json  # machine-readable report for a pipeline
     cococo src/ --fix            # apply safe guard-clause rewrites in place
+    cococo src/ --nested fold    # pre-2.0.0 scoring (fold nested defs into parent)
+    cococo src/ --max 20 --baseline .cococo.json   # ratchet: fail only on regressions
     cococo --explain a.py::Klass.method   # break down one function
     cococo --explain a.py:42              # ...by line number
+
+Exit codes in gate mode: 0 = within ceiling, 1 = offenders found, 2 = the gate
+could not be trusted (nothing scanned, a file skipped, or a --fix write failed).
+A function can suppress itself from the gate with a ``# cococo: ignore`` comment
+on its ``def`` line.
 """
 
 from __future__ import annotations
