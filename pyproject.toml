@@ -52,6 +52,7 @@ max-complexity = 20
 
 [tool.ruff.lint.per-file-ignores]
 "cognitive_complexity/cli.py" = ["T201"]  # CLI prints its results to stdout by design
+"cognitive_complexity/discovery.py" = ["T201"]  # scanner reports skipped files to stderr by design
 "tests/*.py" = ["T201", "S101"]
 "benchmarks/*.py" = ["T201", "S101", "S603"]  # benchmark shells out to pytest on trusted local paths
 

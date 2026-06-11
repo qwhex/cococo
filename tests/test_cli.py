@@ -3,7 +3,8 @@ import json
 
 import pytest
 
-from cognitive_complexity.cli import main, score_paths, scored_functions
+from cognitive_complexity.cli import main
+from cognitive_complexity.discovery import scored_functions
 
 # A function scoring 10 (over a --max of 5), with the ignore directive on the def line.
 IGNORED_OVER = (
@@ -38,7 +39,7 @@ def _write(tmp_path, name, src):
 
 def test_score_paths_finds_functions(tmp_path):
     _write(tmp_path, "m.py", NESTED + FLAT)
-    scores = {qual: score for score, _, _, qual in score_paths([str(tmp_path)])}
+    scores = {f.qualname: f.score for f in scored_functions([str(tmp_path)])}
     assert scores["f"] == 10
     assert scores["g"] == 0
 
@@ -47,14 +48,14 @@ def test_score_paths_accepts_a_bare_file_and_module_level_statements(tmp_path):
     # A `.py` path is scored directly (not only directories), and module-level
     # statements that aren't defs/classes are walked past without error.
     p = _write(tmp_path, "m.py", "import os\nVALUE = 1\n" + NESTED)
-    scores = {qual: score for score, _, _, qual in score_paths([str(p)])}
+    scores = {f.qualname: f.score for f in scored_functions([str(p)])}
     assert scores == {"f": 10}
 
 
 def test_score_paths_skips_unparseable_files(tmp_path):
     _write(tmp_path, "good.py", FLAT)
     _write(tmp_path, "bad.py", "def f(:\n    pass\n")
-    quals = {qual for _, _, _, qual in score_paths([str(tmp_path)])}
+    quals = {f.qualname for f in scored_functions([str(tmp_path)])}
     assert quals == {"g"}
 
 
@@ -272,9 +273,9 @@ def test_json_report_includes_scan_coverage(tmp_path, capsys):
 
 def test_fix_rewrites_file_and_lowers_score(tmp_path, capsys):
     path = _write(tmp_path, "m.py", FIXABLE)
-    before = {q: s for s, _, _, q in score_paths([str(path)])}
+    before = {f.qualname: f.score for f in scored_functions([str(path)])}
     assert main([str(path), "--fix", "--min", "0"]) == 0
-    after = {q: s for s, _, _, q in score_paths([str(path)])}
+    after = {f.qualname: f.score for f in scored_functions([str(path)])}
     assert after["f"] < before["f"]
     assert "if not (x):" in path.read_text()
     err = capsys.readouterr().err
@@ -359,7 +360,7 @@ def outer(n):
 
 def test_nested_defs_reported_as_own_units(tmp_path):
     _write(tmp_path, "m.py", NESTED_FACTORY)
-    scores = {q: s for s, _, _, q in score_paths([str(tmp_path)])}
+    scores = {f.qualname: f.score for f in scored_functions([str(tmp_path)])}
     # The factory itself is trivial; each handler is scored on its own merits,
     # from nesting 0 (no containment surcharge).
     assert scores["create_app"] == 0
@@ -369,7 +370,7 @@ def test_nested_defs_reported_as_own_units(tmp_path):
 
 def test_method_local_nested_def_keeps_class_in_qualname(tmp_path):
     _write(tmp_path, "m.py", METHOD_LOCAL)
-    quals = {q for _, _, _, q in score_paths([str(tmp_path)])}
+    quals = {f.qualname for f in scored_functions([str(tmp_path)])}
     assert "K.m" in quals
     assert "K.m.<locals>.inner" in quals
 
@@ -378,13 +379,13 @@ def test_lambda_still_folds_into_parent(tmp_path):
     # Lambdas are anonymous and keep folding: the `x and x` bool-op counts toward
     # `f`, and no separate lambda unit is reported.
     _write(tmp_path, "m.py", "def f(a):\n    g = lambda x: x and x\n    return g(a)\n")
-    scores = {q: s for s, _, _, q in score_paths([str(tmp_path)])}
+    scores = {f.qualname: f.score for f in scored_functions([str(tmp_path)])}
     assert scores == {"f": 1}
 
 
 def test_nested_recursion_scored_in_nested_unit_not_outer(tmp_path):
     _write(tmp_path, "m.py", NESTED_RECURSION)
-    scores = {q: s for s, _, _, q in score_paths([str(tmp_path)])}
+    scores = {f.qualname: f.score for f in scored_functions([str(tmp_path)])}
     assert scores["outer.<locals>.rec"] == 1  # rec calls itself
     assert scores["outer"] == 0  # outer's call to rec is not outer-recursion
 

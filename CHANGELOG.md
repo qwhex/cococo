@@ -7,6 +7,22 @@ All notable changes to cococo are documented here. The format is based on
 a score — even a bug fix — is a major release, because it can flip a downstream
 `--max` gate red or green.
 
+## [3.3.0] - 2026-06-11
+
+### Added
+
+- `cognitive_complexity.discovery` module exposing `scored_functions(paths)` (plus
+  `iter_python_files`, `find_function`, `parse_target`) so library consumers can
+  discover and score functions from files/directories without importing the CLI
+  presentation layer.
+
+### Changed
+
+- Function-discovery logic moved out of `cognitive_complexity.cli` into the new
+  `discovery` module (the CLI re-imports it; no behavior change). The redundant
+  `cli.score_paths` accessor was removed — use `discovery.scored_functions(...)`
+  and read `ScoredFunction` attributes (`.score`, `.qualname`, …).
+
 ## [3.2.0] - 2026-06-11
 
 ### Added

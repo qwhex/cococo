@@ -104,6 +104,19 @@ cococo src/ --max 20 --json | jq '.functions[] | select(.over)'
 
 ### Library
 
+Score every function under a path (no CLI required):
+
+```python
+from cognitive_complexity.discovery import scored_functions
+
+for f in scored_functions(["src/"]):
+    print(f.qualname, f.score)
+```
+
+`scored_functions` returns a list of `ScoredFunction` named tuples with
+`.score`, `.qualname`, `.path`, `.lineno`, `.funcdef`, `.breakdown`, and
+`.ignored` fields.
+
 The suggestion engine is importable too:
 
 ```python
@@ -115,7 +128,7 @@ for s in suggest_refactors(funcdef, breakdown):
     print(s.title, s.estimated_reduction)
 ```
 
-### Library
+The low-level AST API:
 
 ```python
 >>> import ast
