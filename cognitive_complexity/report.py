@@ -14,21 +14,41 @@ from cognitive_complexity.common_types import ScoredFunction, SkippedFile
 from cognitive_complexity.refactor import suggest_refactors
 
 
+def func_key(func: ScoredFunction) -> str:
+    """Stable identity for a function across runs, used as the baseline key."""
+    return f"{func.path}::{func.qualname}"
+
+
+def is_over(func: ScoredFunction, max_: int | None, baseline: dict[str, int] | None) -> bool:
+    """Whether ``func`` fails the gate: over ``--max``, not ignored, not grandfathered.
+
+    With a ``baseline`` the effective ceiling for a recorded function is the
+    higher of ``--max`` and its baseline score, so a known offender passes at its
+    recorded score and fails only when it regresses above it; a function absent
+    from the baseline is gated at ``--max`` like any new code.
+    """
+    if max_ is None or func.ignored:
+        return False
+    ceiling = max(max_, baseline.get(func_key(func), max_)) if baseline is not None else max_
+    return func.score > ceiling
+
+
 def build_report(
     funcs: list[ScoredFunction],
     max_: int | None,
     min_: int,
     skipped: list[SkippedFile],
     files_scanned: int,
+    baseline: dict[str, int] | None = None,
 ) -> dict[str, object]:
     """Assemble the JSON-able report for the already-filtered ``funcs``.
 
     ``files_scanned`` and ``skipped`` make scan coverage explicit so a consumer
     can tell a clean scan from a partial one: ``"exceeded": 0`` over a tree where
     files failed to parse is no longer indistinguishable from a genuinely clean
-    tree.
+    tree. ``over``/``exceeded`` honor ``# cococo: ignore`` and the baseline.
     """
-    entries = [_func_entry(func, max_) for func in funcs]
+    entries = [_func_entry(func, max_, baseline) for func in funcs]
     return {
         "max": max_,
         "min": min_,
@@ -39,7 +59,9 @@ def build_report(
     }
 
 
-def _func_entry(func: ScoredFunction, max_: int | None) -> dict[str, object]:
+def _func_entry(
+    func: ScoredFunction, max_: int | None, baseline: dict[str, int] | None
+) -> dict[str, object]:
     breakdown = get_cognitive_complexity_breakdown(func.funcdef)
     suggestions = suggest_refactors(func.funcdef, breakdown)
     return {
@@ -47,7 +69,7 @@ def _func_entry(func: ScoredFunction, max_: int | None) -> dict[str, object]:
         "lineno": func.lineno,
         "qualname": func.qualname,
         "complexity": func.score,
-        "over": max_ is not None and func.score > max_,
+        "over": is_over(func, max_, baseline),
         "breakdown": [c._asdict() for c in breakdown],
         "suggestions": [s._asdict() for s in suggestions],
     }

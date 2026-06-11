@@ -32,6 +32,7 @@ cococo a.py b.py --min 10    # only show functions scoring >= 10
 cococo src/ --max 20 --json  # machine-readable report for a pipeline
 cococo src/ --fix            # apply safe guard-clause rewrites in place
 cococo src/ --nested fold    # pre-2.0.0 scoring: fold nested defs into the parent
+cococo src/ --max 20 --baseline .cococo.json  # ratchet: fail only on regressions
 ```
 
 `cococo` scores every function, method, and **named nested function** as its own
@@ -69,6 +70,27 @@ transforms it can prove keep behavior identical (an `if` with no `else` that is
 the last statement of a function or loop body becomes an early
 `return`/`continue` guard, de-indenting its body); anything else is left
 untouched, and comments/formatting in the moved body are preserved.
+
+### Adopting the gate incrementally
+
+No real codebase passes a strict ceiling on day one, so the `--max` gate has two
+ways to grandfather existing offenders rather than be all-or-nothing:
+
+- **Per-function:** put `# cococo: ignore` on a function's `def` line to exclude
+  that one function from the gate (the listing still shows it). cococo warns when
+  an ignore is no longer needed (the function is back under the ceiling), so the
+  directives don't rot silently.
+
+  ```python
+  def legacy_handler(req):  # cococo: ignore
+      ...
+  ```
+
+- **Whole codebase:** `--baseline FILE` (requires `--max`) records every current
+  score the first time it runs, then on later runs fails only on **regressions** —
+  a function rising above its recorded score, or new code over `--max`. This lets
+  a team adopt the gate against a dirty tree in one commit and ratchet down from
+  there. Commit the baseline file; delete it to re-baseline.
 
 ### JSON output
 

@@ -6,13 +6,18 @@ AnyFuncdef = ast.FunctionDef | ast.AsyncFunctionDef
 
 
 class ScoredFunction(NamedTuple):
-    """A scored function plus the node it was scored from (for breakdowns/fixes)."""
+    """A scored function plus the node it was scored from (for breakdowns/fixes).
+
+    ``ignored`` is true when the function's ``def`` line carries a
+    ``# cococo: ignore`` directive, which excludes it from the ``--max`` gate.
+    """
 
     score: int
     path: Path
     lineno: int
     qualname: str
     funcdef: AnyFuncdef
+    ignored: bool = False
 
 
 class SkippedFile(NamedTuple):

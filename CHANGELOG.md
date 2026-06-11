@@ -7,6 +7,20 @@ All notable changes to cococo are documented here. The format is based on
 a score — even a bug fix — is a major release, because it can flip a downstream
 `--max` gate red or green.
 
+## [3.2.0] - 2026-06-11
+
+### Added
+
+- Suppression for the `--max` gate, so it can be adopted incrementally instead of
+  being all-or-nothing:
+  - `# cococo: ignore` on a function's `def` line excludes that function from the
+    gate; an "unused ignore" warning fires when the function is back within the
+    ceiling.
+  - `--baseline FILE` (requires `--max`) records current scores on first run, then
+    fails only on regressions above the recorded score (new code is still gated at
+    `--max`).
+  - JSON `over`/`exceeded` honor both, so the report agrees with the exit code.
+
 ## [3.1.0] - 2026-06-11
 
 ### Added

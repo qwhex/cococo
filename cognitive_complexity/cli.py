@@ -21,7 +21,10 @@ from __future__ import annotations
 
 import argparse
 import ast
+import io
+import json
 import sys
+import tokenize
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -33,7 +36,9 @@ from cognitive_complexity.api import (
 from cognitive_complexity.autofix import atomic_write, fix_source
 from cognitive_complexity.common_types import AnyFuncdef, ScoredFunction, SkippedFile
 from cognitive_complexity.refactor import suggest_refactors
-from cognitive_complexity.report import build_report, to_json
+from cognitive_complexity.report import build_report, func_key, is_over, to_json
+
+_IGNORE_DIRECTIVE = "cococo: ignore"
 
 
 def iter_python_files(paths: list[str]) -> Iterator[Path]:
@@ -109,24 +114,47 @@ def _score_or_skip(
         return [], SkippedFile(path, reason)
 
 
-def _parse_file(path: Path) -> ast.Module:
-    """Read ``path`` as UTF-8 and parse it to an AST module.
+def _parse_file(path: Path) -> tuple[str, ast.Module]:
+    """Read ``path`` as UTF-8 and parse it, returning ``(source, tree)``.
 
     The single read+parse site shared by the scanner and ``--explain``; it raises
     ``OSError`` / ``UnicodeDecodeError`` / ``SyntaxError`` for the caller to map
-    to a skip or a clean message — one policy, not three drifting copies.
+    to a skip or a clean message — one policy, not three drifting copies. The
+    source text comes back too so the scanner can read ``# cococo: ignore``
+    directives (comments are not in the AST).
     """
-    return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    source = path.read_text(encoding="utf-8")
+    return source, ast.parse(source, filename=str(path))
+
+
+def _ignored_lines(source: str) -> set[int]:
+    """Line numbers carrying a ``# cococo: ignore`` comment.
+
+    ``source`` has already parsed cleanly (the caller parsed it first), so
+    tokenizing it raises nothing; only real comment tokens are matched, so the
+    directive text appearing inside a string literal does not count.
+    """
+    return {
+        tok.start[0]
+        for tok in tokenize.generate_tokens(io.StringIO(source).readline)
+        if tok.type == tokenize.COMMENT and _IGNORE_DIRECTIVE in tok.string
+    }
 
 
 def _score_file(path: Path, fold_nested: bool) -> list[ScoredFunction]:
     """Parse and score every function in one file (raises on read/parse/score failure)."""
-    tree = _parse_file(path)
+    source, tree = _parse_file(path)
+    ignore = _ignored_lines(source)
     funcs: list[tuple[AnyFuncdef, str]] = []
     _collect(tree, "", funcs, fold_nested)
     return [
         ScoredFunction(
-            get_cognitive_complexity(funcdef, fold_nested), path, funcdef.lineno, qualname, funcdef
+            get_cognitive_complexity(funcdef, fold_nested),
+            path,
+            funcdef.lineno,
+            qualname,
+            funcdef,
+            funcdef.lineno in ignore,
         )
         for funcdef, qualname in funcs
     ]
@@ -167,7 +195,7 @@ def _find_function(
 
     With neither selector, the file must contain exactly one function.
     """
-    tree = _parse_file(path)
+    _, tree = _parse_file(path)
     funcs: list[tuple[AnyFuncdef, str]] = []
     _collect(tree, "", funcs, fold_nested)
     if not funcs:
@@ -260,6 +288,13 @@ def main(argv: list[str] | None = None) -> int:
         help="score named nested defs as their own units (default) or fold them "
         "into the enclosing function (pre-2.0.0 compatibility)",
     )
+    parser.add_argument(
+        "--baseline",
+        metavar="FILE",
+        default=None,
+        help="ratchet: record current scores to FILE if missing, else fail only on "
+        "functions that regress above their recorded score (requires --max)",
+    )
     args = parser.parse_args(argv)
     fold_nested = args.nested == "fold"
 
@@ -267,16 +302,50 @@ def main(argv: list[str] | None = None) -> int:
         return explain(args.explain, fold_nested)
     if not args.paths:
         parser.error("the following arguments are required: paths (or use --explain)")
+    if args.baseline is not None and args.max is None:
+        parser.error("--baseline requires --max (the ceiling for code not in the baseline)")
 
     fix_failures = _apply_fixes(args.paths) if args.fix else 0
 
     functions, skipped, scanned = _scan(args.paths, fold_nested)
-    scan_code = _scan_exit_code(functions, skipped, scanned, args.max, args.as_json, args.min)
+    baseline = _load_or_create_baseline(Path(args.baseline), functions) if args.baseline else None
+    _warn_unused_ignores(functions, args.max)
+    scan_code = _scan_exit_code(
+        functions, skipped, scanned, args.max, args.as_json, args.min, baseline
+    )
     # A failed --fix write, or a file skipped under a gate, is a hard failure (2)
     # regardless of whether the functions that *did* scan stayed within --max.
     if fix_failures or (skipped and args.max is not None):
         return 2
     return scan_code
+
+
+def _load_or_create_baseline(path: Path, functions: list[ScoredFunction]) -> dict[str, int]:
+    """Load the baseline at ``path``, or create it from current scores and pass.
+
+    A missing file establishes the baseline (every current score recorded) so the
+    first run grandfathers the whole codebase; later runs compare against it.
+    """
+    if path.exists():
+        loaded: dict[str, int] = json.loads(path.read_text(encoding="utf-8"))
+        return loaded
+    baseline = {func_key(f): f.score for f in functions}
+    path.write_text(json.dumps(baseline, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(f"cococo: wrote baseline for {len(baseline)} function(s) to {path}", file=sys.stderr)
+    return baseline
+
+
+def _warn_unused_ignores(functions: list[ScoredFunction], max_: int | None) -> None:
+    """Warn about ``# cococo: ignore`` directives on functions already within the gate."""
+    if max_ is None:
+        return
+    for f in functions:
+        if f.ignored and f.score <= max_:
+            print(
+                f"cococo: unused '# cococo: ignore' on {f.qualname} "
+                f"({f.path}:{f.lineno}) — score {f.score} is within {max_}",
+                file=sys.stderr,
+            )
 
 
 def _scan_exit_code(
@@ -286,12 +355,13 @@ def _scan_exit_code(
     max_: int | None,
     as_json: bool,
     min_: int,
+    baseline: dict[str, int] | None,
 ) -> int:
     if as_json:
-        return _report_json(functions, skipped, scanned, max_, min_)
+        return _report_json(functions, skipped, scanned, max_, min_, baseline)
     if not functions:
         return _empty_scan_exit(max_)
-    return _report(functions, max_, min_)
+    return _report(functions, max_, min_, baseline)
 
 
 def _empty_scan_exit(max_: int | None) -> int:
@@ -356,14 +426,16 @@ def _apply_fixes(paths: list[str]) -> int:
     return failed
 
 
-def _report(functions: list[ScoredFunction], max_: int | None, min_: int) -> int:
+def _report(
+    functions: list[ScoredFunction], max_: int | None, min_: int, baseline: dict[str, int] | None
+) -> int:
     """Print the scored functions and, when ``max_`` is set, gate on it."""
     for f in _shown(functions, max_, min_):
         print(f"{f.score:4d}  {f.path}:{f.lineno}  {f.qualname}")
 
     if max_ is None:
         return 0
-    over = [f for f in functions if f.score > max_]
+    over = [f for f in functions if is_over(f, max_, baseline)]
     if over:
         _print_gate_failure(over, max_)
         return 1
@@ -377,8 +449,9 @@ def _report_json(
     scanned: int,
     max_: int | None,
     min_: int,
+    baseline: dict[str, int] | None,
 ) -> int:
-    report = build_report(_shown(functions, max_, min_), max_, min_, skipped, scanned)
+    report = build_report(_shown(functions, max_, min_), max_, min_, skipped, scanned, baseline)
     print(to_json(report))
     if not functions and max_ is not None:
         return 2  # gate scanned nothing — fail loud even in JSON mode

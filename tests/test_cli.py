@@ -1,7 +1,19 @@
 import ast
 import json
 
+import pytest
+
 from cognitive_complexity.cli import main, score_paths, scored_functions
+
+# A function scoring 10 (over a --max of 5), with the ignore directive on the def line.
+IGNORED_OVER = (
+    "def f(a, b):  # cococo: ignore\n"
+    "    for x in a:\n"
+    "        if x:\n"
+    "            for y in b:\n"
+    "                if y:\n"
+    "                    return y\n"
+)
 
 NESTED = """
 def f(a, b):
@@ -110,6 +122,69 @@ def test_deeply_nested_file_is_skipped_not_crash(tmp_path, capsys):
     err = capsys.readouterr().err
     assert "skipped" in err
     assert "RecursionError" in err
+
+
+# --- e9c5: # cococo: ignore directive + --baseline ratchet ---
+
+
+def test_inline_ignore_excludes_function_from_gate(tmp_path):
+    _write(tmp_path, "m.py", IGNORED_OVER)  # f scores 10 (>5) but is ignored
+    assert main([str(tmp_path), "--max", "5"]) == 0
+
+
+def test_unused_ignore_directive_is_warned(tmp_path, capsys):
+    _write(tmp_path, "m.py", "def g(a):  # cococo: ignore\n    return a\n")  # score 0
+    assert main([str(tmp_path), "--max", "5"]) == 0
+    assert "unused '# cococo: ignore'" in capsys.readouterr().err
+
+
+def test_json_marks_ignored_function_not_over(tmp_path, capsys):
+    _write(tmp_path, "m.py", IGNORED_OVER)
+    assert main([str(tmp_path), "--max", "5", "--json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["exceeded"] == 0
+    assert next(e for e in report["functions"] if e["qualname"] == "f")["over"] is False
+
+
+def test_ignore_directive_inside_a_string_is_not_honored(tmp_path):
+    # The directive must be a real comment, not string content on the def line.
+    src = (
+        'def f(a, b="# cococo: ignore"):\n'
+        "    for x in a:\n"
+        "        if x:\n"
+        "            for y in b:\n"
+        "                if y:\n"
+        "                    return y\n"
+    )
+    _write(tmp_path, "m.py", src)
+    assert main([str(tmp_path), "--max", "5"]) == 1  # not ignored → gate fails
+
+
+def test_baseline_missing_is_created_and_passes(tmp_path, capsys):
+    _write(tmp_path, "m.py", NESTED)  # f scores 10
+    bl = tmp_path / "baseline.json"
+    assert main([str(tmp_path), "--max", "5", "--baseline", str(bl)]) == 0
+    assert "wrote baseline" in capsys.readouterr().err
+    assert any(k.endswith("::f") for k in json.loads(bl.read_text()))
+
+
+def test_baseline_grandfathers_recorded_offender(tmp_path):
+    _write(tmp_path, "m.py", NESTED)
+    bl = tmp_path / "baseline.json"
+    bl.write_text(json.dumps({f"{tmp_path / 'm.py'}::f": 10}))  # recorded at current score
+    assert main([str(tmp_path), "--max", "5", "--baseline", str(bl)]) == 0
+
+
+def test_baseline_fails_when_function_regresses_above_recorded(tmp_path):
+    _write(tmp_path, "m.py", NESTED)  # f now scores 10
+    bl = tmp_path / "baseline.json"
+    bl.write_text(json.dumps({f"{tmp_path / 'm.py'}::f": 7}))  # recorded lower → regression
+    assert main([str(tmp_path), "--max", "5", "--baseline", str(bl)]) == 1
+
+
+def test_baseline_requires_max(tmp_path):
+    with pytest.raises(SystemExit):
+        main([str(tmp_path), "--baseline", str(tmp_path / "b.json")])
 
 
 def test_main_lists_all_functions_worst_first(tmp_path, capsys):
