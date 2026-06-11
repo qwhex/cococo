@@ -224,6 +224,44 @@ def test_raises_on_unparseable_source():
         fix_source("def f(:\n    pass")
 
 
+def test_inverts_compound_condition_with_parentheses():
+    # `if a and b:` must become `if not (a and b):` — NOT `if not a and b:`
+    # which would change precedence and silently alter behaviour.
+    before = (
+        "def f(a, b, items):\n"
+        "    if a and b:\n"
+        "        for i in items:\n"
+        "            if i:\n"
+        "                go(i)\n"
+    )
+    after, count = fix_source(before)
+    assert count == 1
+    assert "if not (a and b):" in after
+    # Precedence-broken form must NOT appear.
+    assert "if not a and b:" not in after
+    ast.parse(after)
+
+
+def test_preserves_crlf_line_endings():
+    # Every existing fixture uses \n; the \r\n branch of _apply_guard is unexercised.
+    # Build the fixture with explicit \r\n — do NOT use textwrap.dedent (it uses \n).
+    before = (
+        "def f(x, items):\r\n"
+        "    if x:\r\n"
+        "        for i in items:\r\n"
+        "            if i:\r\n"
+        "                go(i)\r\n"
+    )
+    after, count = fix_source(before)
+    assert count == 1
+    # The rewritten header line must end with \r\n, not \n.
+    assert "\r\n" in after
+    # No bare \n should appear outside of the \r\n sequences.
+    assert "\n" not in after.replace("\r\n", "")
+    # Result must still be valid Python.
+    ast.parse(after)
+
+
 def test_atomic_write_replaces_content_and_preserves_mode(tmp_path):
     target = tmp_path / "f.py"
     target.write_text("old\n")

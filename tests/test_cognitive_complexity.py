@@ -350,6 +350,52 @@ def test_while_else_complexity():
     )
 
 
+def test_for_else_adds_one_over_plain_for():
+    # A plain for loop scores 1 (nesting=0 → max(1,1) + 0 = 1).
+    assert (
+        get_code_snippet_complexity("""
+    def f(a):
+        for x in a:  # +1
+            pass
+    """)
+        == 1
+    )
+    # Adding an else clause scores 2: the loop scores max(1,1) + 1 (else) = 2.
+    assert (
+        get_code_snippet_complexity("""
+    def f(a):
+        for x in a:  # +1, else +1 → 2
+            pass
+        else:
+            y = 1
+    """)
+        == 2
+    )
+
+
+def test_while_else_adds_one_over_plain_while():
+    # A plain while loop scores 1 (nesting=0 → max(1,1) + 0 = 1).
+    assert (
+        get_code_snippet_complexity("""
+    def f(a):
+        while a:  # +1
+            pass
+    """)
+        == 1
+    )
+    # Adding an else clause scores 2: the loop scores max(1,1) + 1 (else) = 2.
+    assert (
+        get_code_snippet_complexity("""
+    def f(a):
+        while a:  # +1, else +1 → 2
+            pass
+        else:
+            y = 1
+    """)
+        == 2
+    )
+
+
 def test_decorator_factory_own_score_excludes_inner():
     # A decorator factory's own body is just "define inner, return inner", so its
     # own score is 0. The `if condition` belongs to `inner`, scored as its own

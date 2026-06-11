@@ -177,3 +177,53 @@ def test_nested_functions_are_not_walked_as_regions():
         return inner
     """)
     assert suggestions == []
+
+
+# ── Exact estimate-value tests ────────────────────────────────────────────────
+
+_FOUR_ARM_ELIF = """
+def f(cmd):
+    if cmd == "a":
+        return 1
+    elif cmd == "b":
+        return 2
+    elif cmd == "c":
+        return 3
+    elif cmd == "d":
+        return 4
+    elif cmd == "e":
+        return 5
+"""
+
+_FOUR_CASE_MATCH = """
+def f(cmd):
+    match cmd:
+        case "a":
+            return 1
+        case "b":
+            return 2
+        case "c":
+            return 3
+        case "d":
+            return 4
+"""
+
+
+def test_elif_dispatch_reduction_equals_arm_count():
+    # _FOUR_ARM_ELIF has 4 elif arms; _dispatch_reduction returns arms (4).
+    # The formula is: reduction == number of elif arms, not number of branches.
+    [dispatch] = [s for s in _suggest(_FOUR_ARM_ELIF) if s.kind == "split_dispatcher"]
+    assert dispatch.estimated_reduction == 4  # 4 elif arms, not 3 or 5
+
+
+def test_match_dispatch_reduction_is_cases_minus_one():
+    # _FOUR_CASE_MATCH has 4 cases; _dispatch_reduction returns cases - 1 = 3.
+    [dispatch] = [s for s in _suggest(_FOUR_CASE_MATCH) if s.kind == "split_dispatcher"]
+    assert dispatch.estimated_reduction == 3  # 4 cases - 1, not 4 or 2
+
+
+def test_estimated_complexity_after_clamped_at_zero():
+    # _FOUR_CASE_MATCH total complexity == 1 (one match contribution).
+    # dispatch reduction == 3, which exceeds total, so max(0, 1-3) must be 0.
+    [dispatch] = [s for s in _suggest(_FOUR_CASE_MATCH) if s.kind == "split_dispatcher"]
+    assert dispatch.estimated_complexity_after == 0  # clamp: never negative

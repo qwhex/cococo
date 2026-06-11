@@ -203,6 +203,61 @@ def test_comprehension_without_filter_is_zero():
     )
 
 
+def test_dict_comp_single_filter_is_counted():
+    # Dict comprehension: one `if` filter = +1 (same ast.comprehension node as list comp)
+    assert (
+        get_code_snippet_complexity("""
+    def f(items):
+        return {k: v for k, v in items if k}   # +1
+    """)
+        == 1
+    )
+
+
+def test_set_comp_single_filter_is_counted():
+    # Set comprehension: one `if` filter = +1
+    assert (
+        get_code_snippet_complexity("""
+    def f(xs):
+        return {x for x in xs if x}   # +1
+    """)
+        == 1
+    )
+
+
+def test_genexp_single_filter_is_counted():
+    # Generator expression: one `if` filter = +1
+    assert (
+        get_code_snippet_complexity("""
+    def f(xs):
+        return sum(x for x in xs if x)   # +1
+    """)
+        == 1
+    )
+
+
+def test_dict_comp_multiple_filters_are_all_counted():
+    # Two `if` filters on one ast.comprehension node = +2
+    assert (
+        get_code_snippet_complexity("""
+    def f(items):
+        return {k: v for k, v in items if k if v}   # +2 (two filters)
+    """)
+        == 2
+    )
+
+
+def test_nested_comprehension_each_filter_counted_independently():
+    # Two ast.comprehension nodes, each with one `if` filter = +1 + +1 = 2
+    assert (
+        get_code_snippet_complexity("""
+    def f(xss):
+        return [x for xs in xss if xs for x in xs if x]   # +2 (one filter per clause)
+    """)
+        == 2
+    )
+
+
 # --------------------------------------------------------------------------
 # if/elif chains: each branch's body nests; the elif itself does not
 # --------------------------------------------------------------------------
