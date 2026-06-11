@@ -13,7 +13,7 @@ import ast
 from typing import NamedTuple
 
 from cognitive_complexity.api import Contribution
-from cognitive_complexity.common_types import AnyFuncdef
+from cognitive_complexity.common_types import AnyFuncdef, is_funcdef
 
 # Heuristic thresholds (ours, not part of Campbell's metric). Tuned to surface
 # only refactors that meaningfully cut the score; adjust here, in one place.
@@ -118,7 +118,7 @@ def _iter_regions(node: ast.AST) -> list[ast.stmt]:
     """
     regions: list[ast.stmt] = []
     for child in ast.iter_child_nodes(node):
-        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        if is_funcdef(child):
             continue
         if isinstance(child, _REGION_TYPES):
             regions.append(child)

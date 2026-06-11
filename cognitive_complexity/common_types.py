@@ -1,8 +1,18 @@
 import ast
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, TypeGuard
 
 AnyFuncdef = ast.FunctionDef | ast.AsyncFunctionDef
+
+
+def is_funcdef(node: ast.AST) -> TypeGuard[AnyFuncdef]:
+    """True if ``node`` is a (possibly async) function definition.
+
+    One definition of "scorable function unit" for every tree-walker; the
+    ``TypeGuard`` return preserves type narrowing at the call sites (e.g. reading
+    ``node.name``) under strict mypy.
+    """
+    return isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
 
 
 class ScoredFunction(NamedTuple):

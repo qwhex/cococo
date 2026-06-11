@@ -1,10 +1,10 @@
 import ast
 from collections.abc import Iterator
 
-from cognitive_complexity.common_types import AnyFuncdef
+from cognitive_complexity.common_types import AnyFuncdef, is_funcdef
 
 
-def _call_targets_name(call: ast.Call, name: str) -> bool:
+def call_targets_name(call: ast.Call, name: str) -> bool:
     func = call.func
     if isinstance(func, ast.Name):
         return func.id == name
@@ -32,9 +32,7 @@ def decorator_inner(funcdef: AnyFuncdef) -> AnyFuncdef | None:
     if len(funcdef.body) != 2:
         return None
     inner = funcdef.body[0]
-    if isinstance(inner, (ast.FunctionDef, ast.AsyncFunctionDef)) and _returns_name(
-        funcdef.body[1], inner.name
-    ):
+    if is_funcdef(inner) and _returns_name(funcdef.body[1], inner.name):
         return inner
     return None
 
@@ -53,7 +51,7 @@ def _walk_own_scope(funcdef: AnyFuncdef) -> Iterator[ast.AST]:
     while stack:
         node = stack.pop()
         yield node
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        if not is_funcdef(node):
             stack.extend(ast.iter_child_nodes(node))
 
 
@@ -64,7 +62,7 @@ def has_recursive_calls(funcdef: AnyFuncdef) -> bool:
     # per-function AST metric. The walk stays within funcdef's own scope so a
     # call to its name from inside a nested def is not miscounted here.
     return any(
-        _call_targets_name(node, funcdef.name)
+        call_targets_name(node, funcdef.name)
         for node in _walk_own_scope(funcdef)
         if isinstance(node, ast.Call)
     )

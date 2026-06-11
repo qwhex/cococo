@@ -9,6 +9,17 @@ in :func:`_is_safe_guard` is left exactly as it was.
 
 Edits are made on the source text (not via ``ast.unparse``) so comments and
 formatting in the untouched body survive.
+
+Why hand-rolled text surgery and not a CST library (LibCST)? LibCST was
+considered and rejected: its headline win — comment/whitespace preservation — is
+already achieved here for the single transform that exists, and cococo declares
+zero runtime dependencies by design (it is a low-level dependency of other
+pipelines), a posture LibCST's native extension + ``pyyaml`` would break.
+**Reopen trigger:** this calculus holds only because there is exactly one
+provably-safe transform. When a *second* non-trivial rewrite is added, re-run the
+LibCST bake-off — string surgery does not compose across transforms (each one
+re-derives indent units, newline style, and segment boundaries), so at N>=2 the
+decision flips to adopting a CST.
 """
 
 from __future__ import annotations
@@ -17,6 +28,8 @@ import ast
 import os
 import tempfile
 from pathlib import Path
+
+from cognitive_complexity.common_types import is_funcdef
 
 # The transform is idempotent (a flattened guard is no longer the last statement
 # of its block), so this only caps pathological input; it is never reached in
@@ -67,7 +80,7 @@ def _find_guard(tree: ast.AST, source: str) -> tuple[ast.If, str] | None:
 def _guarded_blocks(tree: ast.AST) -> list[tuple[list[ast.stmt], str]]:
     blocks: list[tuple[list[ast.stmt], str]] = []
     for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        if is_funcdef(node):
             blocks.append((node.body, "return"))
         elif isinstance(node, _LOOP_TYPES):
             blocks.append((node.body, "continue"))

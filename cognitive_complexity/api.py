@@ -1,8 +1,9 @@
 import ast
 from typing import NamedTuple
 
-from cognitive_complexity.common_types import AnyFuncdef
+from cognitive_complexity.common_types import AnyFuncdef, is_funcdef
 from cognitive_complexity.utils.ast import (
+    call_targets_name,
     decorator_inner,
     describe_node,
     has_recursive_calls,
@@ -56,11 +57,26 @@ def get_cognitive_complexity_breakdown(
         return get_cognitive_complexity_breakdown(inner, fold_nested)
 
     contributions: list[Contribution] = []
+    # Detect direct recursion inline during this single walk instead of a second
+    # ast.walk. In unit mode the walk visits exactly the function's own scope, so
+    # ``rec_name`` is set and a self-call is found here. In fold mode the walk
+    # descends into folded nested defs, whose calls are NOT the outer's recursion,
+    # so inline detection is disabled and the own-scope-only ``has_recursive_calls``
+    # is used instead.
+    rec_name = None if fold_nested else funcdef.name
+    rec_found = [False]
     for node in funcdef.body:
-        _collect_breakdown(node, 0, funcdef.lineno, contributions, fold_nested)
-    if has_recursive_calls(funcdef):
+        _collect_breakdown(node, 0, funcdef.lineno, contributions, fold_nested, rec_name, rec_found)
+    recursive = has_recursive_calls(funcdef) if fold_nested else rec_found[0]
+    if recursive:
         contributions.append(Contribution(funcdef.lineno, "recursion", 1, 0, False))
     return contributions
+
+
+def _mark_recursion(node: ast.AST, rec_name: str | None, rec_found: list[bool]) -> None:
+    """Flag direct recursion when ``node`` is a call to ``rec_name`` (None disables)."""
+    if rec_name is not None and isinstance(node, ast.Call) and call_targets_name(node, rec_name):
+        rec_found[0] = True
 
 
 def _collect_breakdown(
@@ -68,14 +84,17 @@ def _collect_breakdown(
     increment_by: int,
     parent_lineno: int,
     out: list[Contribution],
-    fold_nested: bool = False,
+    fold_nested: bool,
+    rec_name: str | None,
+    rec_found: list[bool],
 ) -> None:
+    _mark_recursion(node, rec_name, rec_found)
     # In unit mode a named nested function is its own reporting unit (discovered
     # separately by the CLI, scored from nesting 0): it contributes nothing here
     # and the walk does not descend into it. In fold mode it is left to
     # process_node_itself, which treats it as a nesting incrementer. Lambdas are
     # anonymous and always fold.
-    if not fold_nested and isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+    if not fold_nested and is_funcdef(node):
         return
 
     # `if`/`elif`/`else` chains need their body and orelse scored at different
@@ -83,7 +102,9 @@ def _collect_breakdown(
     # at the same level), which the uniform child walk below cannot express —
     # so they get their own handler.
     if isinstance(node, ast.If):
-        _collect_if_breakdown(node, increment_by, out, fold_nested, is_elif_arm=False)
+        _collect_if_breakdown(
+            node, increment_by, out, fold_nested, rec_name, rec_found, is_elif_arm=False
+        )
         return
 
     nesting_before = increment_by
@@ -109,14 +130,16 @@ def _collect_breakdown(
 
     if should_iter_children:
         for child in ast.iter_child_nodes(node):
-            _collect_breakdown(child, increment_by, lineno, out, fold_nested)
+            _collect_breakdown(child, increment_by, lineno, out, fold_nested, rec_name, rec_found)
 
 
 def _collect_if_breakdown(
     node: ast.If,
     increment_by: int,
     out: list[Contribution],
-    fold_nested: bool = False,
+    fold_nested: bool,
+    rec_name: str | None,
+    rec_found: list[bool],
     *,
     is_elif_arm: bool,
 ) -> None:
@@ -134,16 +157,18 @@ def _collect_if_breakdown(
         )
     )
     body_level = increment_by + 1
-    _collect_breakdown(node.test, increment_by, node.lineno, out, fold_nested)
+    _collect_breakdown(node.test, increment_by, node.lineno, out, fold_nested, rec_name, rec_found)
     for stmt in node.body:
-        _collect_breakdown(stmt, body_level, node.lineno, out, fold_nested)
+        _collect_breakdown(stmt, body_level, node.lineno, out, fold_nested, rec_name, rec_found)
 
     orelse = node.orelse
     if len(orelse) == 1 and isinstance(orelse[0], ast.If):
         # `elif`: a sibling at the same nesting level, not a nested `if`.
-        _collect_if_breakdown(orelse[0], increment_by, out, fold_nested, is_elif_arm=True)
+        _collect_if_breakdown(
+            orelse[0], increment_by, out, fold_nested, rec_name, rec_found, is_elif_arm=True
+        )
     elif orelse:
         # `else`: +1, no nesting penalty; its body is scored one level deeper.
         out.append(Contribution(orelse[0].lineno, "else", 1, increment_by, False))
         for stmt in orelse:
-            _collect_breakdown(stmt, body_level, node.lineno, out, fold_nested)
+            _collect_breakdown(stmt, body_level, node.lineno, out, fold_nested, rec_name, rec_found)

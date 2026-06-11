@@ -34,7 +34,12 @@ from cognitive_complexity.api import (
     get_cognitive_complexity_breakdown,
 )
 from cognitive_complexity.autofix import atomic_write, fix_source
-from cognitive_complexity.common_types import AnyFuncdef, ScoredFunction, SkippedFile
+from cognitive_complexity.common_types import (
+    AnyFuncdef,
+    ScoredFunction,
+    SkippedFile,
+    is_funcdef,
+)
 from cognitive_complexity.refactor import suggest_refactors
 from cognitive_complexity.report import build_report, func_key, is_over, to_json
 
@@ -68,7 +73,7 @@ def _collect(
     function's score — so the recursion does not descend into them.
     """
     for child in ast.iter_child_nodes(node):
-        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        if is_funcdef(child):
             qualname = f"{qualifier}{child.name}"
             out.append((child, qualname))
             if not fold_nested:
