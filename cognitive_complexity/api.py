@@ -3,6 +3,7 @@ from typing import NamedTuple
 
 from cognitive_complexity.common_types import AnyFuncdef
 from cognitive_complexity.utils.ast import (
+    decorator_inner,
     describe_node,
     has_recursive_calls,
     process_node_itself,
@@ -31,23 +32,32 @@ class Contribution(NamedTuple):
     nesting_counted: bool
 
 
-def get_cognitive_complexity(funcdef: AnyFuncdef) -> int:
+def get_cognitive_complexity(funcdef: AnyFuncdef, fold_nested: bool = False) -> int:
     """Total cognitive complexity: the sum of every scored construct's points."""
-    return sum(c.points for c in get_cognitive_complexity_breakdown(funcdef))
+    return sum(c.points for c in get_cognitive_complexity_breakdown(funcdef, fold_nested))
 
 
-def get_cognitive_complexity_breakdown(funcdef: AnyFuncdef) -> list[Contribution]:
+def get_cognitive_complexity_breakdown(
+    funcdef: AnyFuncdef, fold_nested: bool = False
+) -> list[Contribution]:
     """Per-node breakdown of a function's cognitive complexity.
 
     Records every construct that contributed points and the nesting level in
     effect at that point. Recursive calls add a trailing synthetic entry. The
     ``points`` column sums to the total returned by
-    :func:`get_cognitive_complexity`. Named nested functions are *not* folded in
-    — they are scored as their own units (see :func:`_collect_breakdown`).
+    :func:`get_cognitive_complexity`. By default named nested functions are *not*
+    folded in — they are scored as their own units. With ``fold_nested=True``
+    (the pre-2.0.0 model) a nested def folds into its enclosing function as a
+    nesting level, and a decorator/closure factory is scored by its inner
+    function.
     """
+    inner = decorator_inner(funcdef) if fold_nested else None
+    if inner is not None:
+        return get_cognitive_complexity_breakdown(inner, fold_nested)
+
     contributions: list[Contribution] = []
     for node in funcdef.body:
-        _collect_breakdown(node, 0, funcdef.lineno, contributions)
+        _collect_breakdown(node, 0, funcdef.lineno, contributions, fold_nested)
     if has_recursive_calls(funcdef):
         contributions.append(Contribution(funcdef.lineno, "recursion", 1, 0, False))
     return contributions
@@ -58,12 +68,14 @@ def _collect_breakdown(
     increment_by: int,
     parent_lineno: int,
     out: list[Contribution],
+    fold_nested: bool = False,
 ) -> None:
-    # A named nested function is its own reporting unit (discovered separately by
-    # the CLI and scored from nesting level 0). It contributes nothing to the
-    # enclosing function and the walk does not descend into it. Lambdas are
-    # anonymous and still fold (handled by process_node_itself).
-    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+    # In unit mode a named nested function is its own reporting unit (discovered
+    # separately by the CLI, scored from nesting 0): it contributes nothing here
+    # and the walk does not descend into it. In fold mode it is left to
+    # process_node_itself, which treats it as a nesting incrementer. Lambdas are
+    # anonymous and always fold.
+    if not fold_nested and isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
         return
 
     # `if`/`elif`/`else` chains need their body and orelse scored at different
@@ -71,11 +83,13 @@ def _collect_breakdown(
     # at the same level), which the uniform child walk below cannot express —
     # so they get their own handler.
     if isinstance(node, ast.If):
-        _collect_if_breakdown(node, increment_by, out, is_elif_arm=False)
+        _collect_if_breakdown(node, increment_by, out, fold_nested, is_elif_arm=False)
         return
 
     nesting_before = increment_by
-    increment_by, base_complexity, should_iter_children = process_node_itself(node, increment_by)
+    increment_by, base_complexity, should_iter_children = process_node_itself(
+        node, increment_by, fold_nested
+    )
     # Some scored nodes (ast.comprehension) carry no line of their own; fall
     # back to the nearest ancestor that did.
     lineno = getattr(node, "lineno", parent_lineno)
@@ -95,13 +109,14 @@ def _collect_breakdown(
 
     if should_iter_children:
         for child in ast.iter_child_nodes(node):
-            _collect_breakdown(child, increment_by, lineno, out)
+            _collect_breakdown(child, increment_by, lineno, out, fold_nested)
 
 
 def _collect_if_breakdown(
     node: ast.If,
     increment_by: int,
     out: list[Contribution],
+    fold_nested: bool = False,
     *,
     is_elif_arm: bool,
 ) -> None:
@@ -119,16 +134,16 @@ def _collect_if_breakdown(
         )
     )
     body_level = increment_by + 1
-    _collect_breakdown(node.test, increment_by, node.lineno, out)
+    _collect_breakdown(node.test, increment_by, node.lineno, out, fold_nested)
     for stmt in node.body:
-        _collect_breakdown(stmt, body_level, node.lineno, out)
+        _collect_breakdown(stmt, body_level, node.lineno, out, fold_nested)
 
     orelse = node.orelse
     if len(orelse) == 1 and isinstance(orelse[0], ast.If):
         # `elif`: a sibling at the same nesting level, not a nested `if`.
-        _collect_if_breakdown(orelse[0], increment_by, out, is_elif_arm=True)
+        _collect_if_breakdown(orelse[0], increment_by, out, fold_nested, is_elif_arm=True)
     elif orelse:
         # `else`: +1, no nesting penalty; its body is scored one level deeper.
         out.append(Contribution(orelse[0].lineno, "else", 1, increment_by, False))
         for stmt in orelse:
-            _collect_breakdown(stmt, body_level, node.lineno, out)
+            _collect_breakdown(stmt, body_level, node.lineno, out, fold_nested)

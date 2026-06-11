@@ -14,6 +14,9 @@ formatting in the untouched body survive.
 from __future__ import annotations
 
 import ast
+import os
+import tempfile
+from pathlib import Path
 
 # The transform is idempotent (a flattened guard is no longer the last statement
 # of its block), so this only caps pathological input; it is never reached in
@@ -81,11 +84,27 @@ def _is_safe_guard(node: ast.If, source: str) -> bool:
         return False
     if not _has_nested_breaker(node.body):  # flattening would save nothing
         return False
+    if _has_multiline_string(node.body):  # blind dedent would corrupt string content
+        return False
     return _indent_unit(node, source) > 0
 
 
 def _has_nested_breaker(body: list[ast.stmt]) -> bool:
     return any(isinstance(inner, _BREAKER_TYPES) for stmt in body for inner in ast.walk(stmt))
+
+
+def _has_multiline_string(body: list[ast.stmt]) -> bool:
+    """True if any string / f-string literal in the body spans multiple lines.
+
+    Dedenting such a body line-by-line (``_dedent``) would strip leading spaces
+    that are *content* of the literal, silently changing its value — so the
+    guard is left untouched rather than risk corrupting source.
+    """
+    return any(
+        isinstance(inner, (ast.Constant, ast.JoinedStr)) and inner.lineno != inner.end_lineno
+        for stmt in body
+        for inner in ast.walk(stmt)
+    )
 
 
 def _leading_ws(line: str) -> str:
@@ -132,3 +151,26 @@ def _inverted_condition(test: ast.expr, source: str) -> str:
             return inner
     segment = ast.get_source_segment(source, test)
     return f"not ({segment})"
+
+
+def atomic_write(path: Path, data: str) -> None:
+    """Overwrite ``path`` with ``data`` atomically, preserving its file mode.
+
+    Writes to a temp file in the same directory, fsyncs it, then ``os.replace``s
+    it over ``path`` — atomic within a filesystem, so a crash mid-write leaves
+    the original file intact rather than truncated/half-written. The temp file is
+    removed if anything fails (including on interrupt). ``newline=""`` keeps the
+    data's line endings byte-for-byte (the transform may emit ``\\r\\n``).
+    """
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    tmp_file = Path(tmp)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        tmp_file.chmod(path.stat().st_mode)
+        tmp_file.replace(path)
+    except BaseException:
+        tmp_file.unlink(missing_ok=True)
+        raise

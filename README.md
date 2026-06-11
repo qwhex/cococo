@@ -31,6 +31,7 @@ cococo src/ --max 20         # gate: exit non-zero if any function exceeds 20
 cococo a.py b.py --min 10    # only show functions scoring >= 10
 cococo src/ --max 20 --json  # machine-readable report for a pipeline
 cococo src/ --fix            # apply safe guard-clause rewrites in place
+cococo src/ --nested fold    # pre-2.0.0 scoring: fold nested defs into the parent
 ```
 
 `cococo` scores every function, method, and **named nested function** as its own
@@ -43,6 +44,12 @@ handler is judged on its own merits. Lambdas, being anonymous, still fold into
 their enclosing function. See
 [docs/nested-function-scoring.md](docs/nested-function-scoring.md) for the
 rationale.
+
+For gates pinned to pre-2.0.0 numbers, `--nested=fold` restores the old model
+(nested defs fold into the enclosing function; a decorator/closure factory is
+scored by its inner function) as a migration aid; the same is available in the
+library as `get_cognitive_complexity(funcdef, fold_nested=True)`. See
+[CHANGELOG.md](CHANGELOG.md).
 
 ### Refactor suggestions on a failing gate
 

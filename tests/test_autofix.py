@@ -1,10 +1,11 @@
 import ast
+import os
 import textwrap
 
 import pytest
 
 from cognitive_complexity.api import get_cognitive_complexity
-from cognitive_complexity.autofix import fix_source
+from cognitive_complexity.autofix import atomic_write, fix_source
 
 
 def _score(src: str) -> int:
@@ -183,6 +184,65 @@ def test_behavior_is_preserved_across_inputs():
             assert before_out == after_out
 
 
+def test_does_not_touch_body_with_multiline_string():
+    # A blind line-by-line dedent would strip leading spaces that are *content*
+    # of the multi-line string, silently changing its runtime value. The guard
+    # must be left untouched instead.
+    before = textwrap.dedent('''
+        def f(x, items):
+            if x:
+                msg = """
+                keep this indented line
+                """
+                for i in items:
+                    if i:
+                        go(i, msg)
+        ''').strip()
+    after, count = fix_source(before)
+    assert count == 0
+    assert after == before
+
+
+def test_does_not_touch_body_with_multiline_fstring():
+    before = textwrap.dedent('''
+        def f(x, items, name):
+            if x:
+                msg = f"""
+                hello {name}
+                """
+                for i in items:
+                    if i:
+                        go(i, msg)
+        ''').strip()
+    after, count = fix_source(before)
+    assert count == 0
+    assert after == before
+
+
 def test_raises_on_unparseable_source():
     with pytest.raises(SyntaxError):
         fix_source("def f(:\n    pass")
+
+
+def test_atomic_write_replaces_content_and_preserves_mode(tmp_path):
+    target = tmp_path / "f.py"
+    target.write_text("old\n")
+    target.chmod(0o750)
+    atomic_write(target, "new\n")
+    assert target.read_text() == "new\n"
+    assert (target.stat().st_mode & 0o777) == 0o750
+    assert list(tmp_path.glob("*.tmp")) == []  # no temp left behind
+
+
+def test_atomic_write_keeps_original_and_cleans_temp_on_failure(tmp_path, monkeypatch):
+    target = tmp_path / "f.py"
+    target.write_text("original\n")
+
+    def boom(*_args: object) -> None:
+        raise OSError("fsync failed")
+
+    monkeypatch.setattr(os, "fsync", boom)
+    with pytest.raises(OSError, match="fsync failed"):
+        atomic_write(target, "corrupted")
+    assert target.read_text() == "original\n"  # untruncated, untouched
+    assert list(tmp_path.glob("*.tmp")) == []  # temp cleaned up despite failure

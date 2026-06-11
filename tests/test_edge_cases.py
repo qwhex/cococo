@@ -162,6 +162,22 @@ def test_unrelated_method_call_is_not_recursion():
     )
 
 
+def test_outer_name_called_only_inside_nested_def_is_not_outer_recursion():
+    # `f` is referenced only from inside `g`. Under Option A (nested defs are
+    # independent units) that call belongs to g's unit, not f's — so f is NOT
+    # recursive and scores 0. Previously the recursion check walked into g and
+    # miscounted it as f's recursion (+1).
+    assert (
+        get_code_snippet_complexity("""
+    def f(a):
+        def g():
+            return f()   # calls the OUTER name, from inside a nested def
+        return g
+    """)
+        == 0
+    )
+
+
 # --------------------------------------------------------------------------
 # Comprehension filters are decision points
 # --------------------------------------------------------------------------

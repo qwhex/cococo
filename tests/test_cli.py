@@ -1,7 +1,7 @@
 import ast
 import json
 
-from cognitive_complexity.cli import main, score_paths
+from cognitive_complexity.cli import main, score_paths, scored_functions
 
 NESTED = """
 def f(a, b):
@@ -59,6 +59,57 @@ def test_main_gate_passes_when_within_max(tmp_path):
 
 def test_main_empty_returns_zero(tmp_path):
     assert main([str(tmp_path)]) == 0
+
+
+def test_gate_fails_loud_on_empty_scan(tmp_path, capsys):
+    # A --max gate that scans zero functions is a misconfiguration, not a pass.
+    assert main([str(tmp_path), "--max", "10"]) == 2
+    assert "no functions scanned" in capsys.readouterr().err
+
+
+def test_gate_fails_on_nonexistent_path(tmp_path, capsys):
+    assert main([str(tmp_path / "missing"), "--max", "10"]) == 2
+    assert "no functions scanned" in capsys.readouterr().err
+
+
+def test_json_empty_scan_emits_valid_report(tmp_path, capsys):
+    assert main([str(tmp_path), "--json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["functions"] == []
+    assert report["exceeded"] == 0
+
+
+def test_json_empty_scan_under_gate_fails_but_still_emits_report(tmp_path, capsys):
+    assert main([str(tmp_path), "--max", "10", "--json"]) == 2
+    assert json.loads(capsys.readouterr().out)["functions"] == []
+
+
+def test_gate_fails_when_a_file_is_skipped(tmp_path, capsys):
+    # A good file under the ceiling plus an unparseable file: the gate must NOT
+    # pass — the skipped file could hide an over-complexity function.
+    _write(tmp_path, "good.py", FLAT)
+    _write(tmp_path, "bad.py", "def f(:\n    pass\n")
+    assert main([str(tmp_path), "--max", "10"]) == 2
+    assert "skipped" in capsys.readouterr().err
+
+
+def test_skipped_file_is_reported_even_without_a_gate(tmp_path, capsys):
+    _write(tmp_path, "good.py", FLAT)
+    _write(tmp_path, "bad.py", "def f(:\n    pass\n")
+    assert main([str(tmp_path)]) == 0  # no gate → informational only
+    assert "skipped" in capsys.readouterr().err
+
+
+def test_deeply_nested_file_is_skipped_not_crash(tmp_path, capsys):
+    # A crafted deep-AST file (a ~2000-deep subscript) overflows the scorer's
+    # recursion; it must skip that one file (loud, gate-failing) rather than
+    # abort the whole scan with an uncaught RecursionError.
+    _write(tmp_path, "deep.py", "def f():\n    return a" + "[0]" * 2000 + "\n")
+    _write(tmp_path, "ok.py", FLAT)
+    assert main([str(tmp_path), "--max", "10"]) == 2
+    err = capsys.readouterr().err
+    assert "skipped" in err
+    assert "RecursionError" in err
 
 
 def test_main_lists_all_functions_worst_first(tmp_path, capsys):
@@ -155,6 +206,30 @@ def test_fix_skips_unparseable_files_without_crashing(tmp_path, capsys):
     assert "applied 0 guard-clause fix(es)" in capsys.readouterr().err
 
 
+def test_fix_leaves_files_without_fixable_pattern_untouched(tmp_path, capsys):
+    path = _write(tmp_path, "m.py", FLAT)  # nothing to flatten
+    assert main([str(path), "--fix", "--min", "0"]) == 0
+    assert path.read_text() == FLAT
+    assert "applied 0 guard-clause fix(es)" in capsys.readouterr().err
+
+
+def test_fix_write_failure_is_reported_and_exits_nonzero(tmp_path, capsys, monkeypatch):
+    # A write that fails mid-batch must not abort the run, must be reported, and
+    # must surface in the exit code (was: silent success / exit 0).
+    import cognitive_complexity.cli as climod
+
+    path = _write(tmp_path, "m.py", FIXABLE)
+
+    def boom(_path: object, _data: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(climod, "atomic_write", boom)
+    assert main([str(path), "--fix", "--min", "0"]) == 2
+    err = capsys.readouterr().err
+    assert "FAILED to write" in err
+    assert path.read_text() == FIXABLE  # original untouched
+
+
 # --- Option A: named nested functions are scored as their own units ---
 
 NESTED_FACTORY = """
@@ -240,3 +315,57 @@ def test_explain_resolves_nested_def_by_line(tmp_path, capsys):
     )
     assert main(["--explain", f"{p}:{line}"]) == 0
     assert "handler_a" in capsys.readouterr().out
+
+
+# --- --nested=fold compatibility mode (pre-2.0.0 scoring) ---
+
+DECORATOR = """
+def deco(f):
+    def wrapper(x):
+        if x:
+            return f(x)
+    return wrapper
+"""
+
+
+def test_nested_fold_mode_folds_handlers_into_parent(tmp_path):
+    _write(tmp_path, "m.py", NESTED_FACTORY)
+    scores = {f.qualname: f.score for f in scored_functions([str(tmp_path)], fold_nested=True)}
+    # Fold mode: handlers are NOT separate units; they fold into create_app, each
+    # scored one nesting level deeper (handler_a 6->9, handler_b 1->2 => 11).
+    assert scores == {"create_app": 11}
+
+
+def test_nested_fold_mode_scores_decorator_by_inner_function(tmp_path):
+    _write(tmp_path, "m.py", DECORATOR)
+    scores = {f.qualname: f.score for f in scored_functions([str(tmp_path)], fold_nested=True)}
+    # is_decorator: deco returns its single inner, so it is scored AS wrapper
+    # (the `if x` at nesting 0 = 1), not wrapper-folded-at-nesting-1 (which is 2).
+    assert scores == {"deco": 1}
+
+
+def test_nested_fold_two_statement_non_decorator_folds_normally(tmp_path):
+    # Exactly two statements and the first is a nested def, but it is NOT returned
+    # by name — so this is not a decorator. In fold mode it scores normally with
+    # the inner def folded in (the `if x` at nesting 1 => 2), not scored-as-inner.
+    src = "def f(x):\n    def g():\n        if x:\n            return 1\n    return 2\n"
+    _write(tmp_path, "m.py", src)
+    scores = {fn.qualname: fn.score for fn in scored_functions([str(tmp_path)], fold_nested=True)}
+    assert scores == {"f": 2}
+
+
+def test_cli_nested_fold_flag_collapses_units(tmp_path, capsys):
+    _write(tmp_path, "m.py", NESTED_FACTORY)
+    assert main([str(tmp_path), "--min", "0"]) == 0
+    assert "create_app.<locals>.handler_a" in capsys.readouterr().out  # unit mode: separate
+    assert main([str(tmp_path), "--min", "0", "--nested", "fold"]) == 0
+    fold_out = capsys.readouterr().out
+    assert "<locals>" not in fold_out  # fold mode: one create_app row
+    assert "create_app" in fold_out
+
+
+def test_explain_respects_nested_fold_mode(tmp_path, capsys):
+    p = _write(tmp_path, "m.py", NESTED_FACTORY)
+    # In fold mode the nested unit no longer exists; create_app is the whole score.
+    assert main(["--explain", f"{p}::create_app", "--nested", "fold"]) == 0
+    assert "cognitive complexity = 11" in capsys.readouterr().out

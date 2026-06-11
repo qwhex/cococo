@@ -1,4 +1,5 @@
 import ast
+from collections.abc import Iterator
 
 from cognitive_complexity.common_types import AnyFuncdef
 
@@ -13,14 +14,58 @@ def _call_targets_name(call: ast.Call, name: str) -> bool:
     return False
 
 
+def _returns_name(stmt: ast.stmt, name: str) -> bool:
+    return (
+        isinstance(stmt, ast.Return) and isinstance(stmt.value, ast.Name) and stmt.value.id == name
+    )
+
+
+def decorator_inner(funcdef: AnyFuncdef) -> AnyFuncdef | None:
+    """The single inner function a decorator/closure factory returns, else ``None``.
+
+    A function that defines exactly one inner function and returns *that function
+    by name* is structurally a decorator (or value-returning closure factory); in
+    fold mode it is scored as that inner function (pre-2.0.0 compat). Returning
+    the node — rather than a bool — lets callers use the narrowed inner directly,
+    so they need not re-index and re-type ``funcdef.body[0]``.
+    """
+    if len(funcdef.body) != 2:
+        return None
+    inner = funcdef.body[0]
+    if isinstance(inner, (ast.FunctionDef, ast.AsyncFunctionDef)) and _returns_name(
+        funcdef.body[1], inner.name
+    ):
+        return inner
+    return None
+
+
+def _walk_own_scope(funcdef: AnyFuncdef) -> Iterator[ast.AST]:
+    """Yield every node in ``funcdef``'s own scope, not descending into nested defs.
+
+    Named nested ``def``/``async def`` are independent scoring units (Option A),
+    so a call living inside one belongs to that unit, not to ``funcdef``. Walking
+    the whole subtree (``ast.walk``) would miscount a call to ``funcdef``'s name
+    made from inside a nested def as the outer function's recursion. The walk is
+    iterative (an explicit stack) so a deeply nested expression can't blow the
+    interpreter's recursion limit just while we look for recursion.
+    """
+    stack: list[ast.AST] = list(ast.iter_child_nodes(funcdef))
+    while stack:
+        node = stack.pop()
+        yield node
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            stack.extend(ast.iter_child_nodes(node))
+
+
 def has_recursive_calls(funcdef: AnyFuncdef) -> bool:
     # Direct recursion only: a call by the function's own name, or a
     # self/cls method call to it. Indirect/mutual recursion (a -> b -> a) is
     # not detected; that needs a whole-program call graph, out of scope for a
-    # per-function AST metric.
+    # per-function AST metric. The walk stays within funcdef's own scope so a
+    # call to its name from inside a nested def is not miscounted here.
     return any(
         _call_targets_name(node, funcdef.name)
-        for node in ast.walk(funcdef)
+        for node in _walk_own_scope(funcdef)
         if isinstance(node, ast.Call)
     )
 
@@ -89,6 +134,7 @@ def process_control_flow_breaker(
 def process_node_itself(
     node: ast.AST,
     increment_by: int,
+    fold_nested: bool = False,
 ) -> tuple[int, int, bool]:
     # `ast.If` is intercepted by api._collect_if_breakdown before reaching here.
     control_flow_breakers = (
@@ -99,9 +145,12 @@ def process_node_itself(
         ast.ExceptHandler,
         ast.Match,
     )
-    # Only lambdas add a nesting level to the enclosing function. Named nested
-    # `def`s are scored as their own units and never reach here (api skips them).
-    incrementers_nodes = (ast.Lambda,)
+    # Lambdas always add a nesting level and fold in. In the default unit mode
+    # named nested `def`s are scored as their own units and never reach here; in
+    # fold mode (pre-2.0.0 compat) they too add a nesting level and fold in.
+    incrementers_nodes: tuple[type[ast.AST], ...] = (
+        (ast.Lambda, ast.FunctionDef, ast.AsyncFunctionDef) if fold_nested else (ast.Lambda,)
+    )
 
     if isinstance(node, control_flow_breakers):
         return process_control_flow_breaker(node, increment_by)

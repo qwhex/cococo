@@ -30,7 +30,7 @@ from cognitive_complexity.api import (
     get_cognitive_complexity,
     get_cognitive_complexity_breakdown,
 )
-from cognitive_complexity.autofix import fix_source
+from cognitive_complexity.autofix import atomic_write, fix_source
 from cognitive_complexity.common_types import AnyFuncdef, ScoredFunction
 from cognitive_complexity.refactor import suggest_refactors
 from cognitive_complexity.report import build_report, to_json
@@ -45,41 +45,80 @@ def iter_python_files(paths: list[str]) -> Iterator[Path]:
             yield path
 
 
-def _collect(node: ast.AST, qualifier: str, out: list[tuple[AnyFuncdef, str]]) -> None:
-    """Every function, method, and named nested function, each as its own unit.
+def _collect(
+    node: ast.AST,
+    qualifier: str,
+    out: list[tuple[AnyFuncdef, str]],
+    fold_nested: bool = False,
+) -> None:
+    """Discover the functions to score under ``node``.
 
     ``qualifier`` is the enclosing-name prefix threaded down the recursion: a
     class extends it with ``Klass.`` and a named def extends it with
     ``name.<locals>.`` before recursing, so nested defs report as
     ``outer.<locals>.inner`` and method-local defs keep the class
-    (``Klass.method.<locals>.inner``). Nested functions are scored as their own
-    units, not folded into the enclosing function (see ``api``).
+    (``Klass.method.<locals>.inner``). By default nested functions are their own
+    units (the recursion descends into them). In fold mode (pre-2.0.0 compat)
+    nested defs are *not* listed separately — they fold into the enclosing
+    function's score — so the recursion does not descend into them.
     """
     for child in ast.iter_child_nodes(node):
         if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
             qualname = f"{qualifier}{child.name}"
             out.append((child, qualname))
-            _collect(child, f"{qualname}.<locals>.", out)
+            if not fold_nested:
+                _collect(child, f"{qualname}.<locals>.", out, fold_nested)
         elif isinstance(child, ast.ClassDef):
-            _collect(child, f"{qualifier}{child.name}.", out)
+            _collect(child, f"{qualifier}{child.name}.", out, fold_nested)
         else:
-            _collect(child, qualifier, out)
+            _collect(child, qualifier, out, fold_nested)
 
 
-def scored_functions(paths: list[str]) -> list[ScoredFunction]:
+def _scan(paths: list[str], fold_nested: bool = False) -> tuple[list[ScoredFunction], list[Path]]:
+    """Score every function under ``paths``; also return the files that were skipped.
+
+    A file that cannot be read or parsed is reported on stderr and recorded as
+    skipped — never silently dropped — so the caller can fail a ``--max`` gate
+    rather than pass it on partial coverage. The ``OSError`` in the caught tuple
+    covers permission-denied / vanished files (previously those aborted the scan).
+    """
+    outcomes = [_score_or_skip(path, fold_nested) for path in iter_python_files(paths)]
+    results = [func for scored, _ in outcomes for func in scored]
+    skipped = [path for _, path in outcomes if path is not None]
+    return results, skipped
+
+
+def _score_or_skip(path: Path, fold_nested: bool) -> tuple[list[ScoredFunction], Path | None]:
+    """Score one file, or report+record it as skipped on any unscoreable failure.
+
+    Returns ``(scored, None)`` on success or ``([], path)`` on failure. Catches
+    read/parse errors and ``RecursionError`` from a pathologically deep AST (a
+    crafted subscript chain, a huge ``elif`` ladder) so one bad file is skipped
+    loudly rather than aborting the whole run.
+    """
+    try:
+        return _score_file(path, fold_nested), None
+    except (OSError, UnicodeDecodeError, SyntaxError, RecursionError) as exc:
+        print(f"cococo: skipped {path}: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return [], path
+
+
+def _score_file(path: Path, fold_nested: bool) -> list[ScoredFunction]:
+    """Parse and score every function in one file (raises on read/parse/score failure)."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    funcs: list[tuple[AnyFuncdef, str]] = []
+    _collect(tree, "", funcs, fold_nested)
+    return [
+        ScoredFunction(
+            get_cognitive_complexity(funcdef, fold_nested), path, funcdef.lineno, qualname, funcdef
+        )
+        for funcdef, qualname in funcs
+    ]
+
+
+def scored_functions(paths: list[str], fold_nested: bool = False) -> list[ScoredFunction]:
     """Score every function found under ``paths``, keeping its AST node."""
-    results: list[ScoredFunction] = []
-    for path in iter_python_files(paths):
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        except (SyntaxError, UnicodeDecodeError):
-            continue
-        funcs: list[tuple[AnyFuncdef, str]] = []
-        _collect(tree, "", funcs)
-        for funcdef, qualname in funcs:
-            score = get_cognitive_complexity(funcdef)
-            results.append(ScoredFunction(score, path, funcdef.lineno, qualname, funcdef))
-    return results
+    return _scan(paths, fold_nested)[0]
 
 
 def score_paths(paths: list[str]) -> list[tuple[int, Path, int, str]]:
@@ -106,6 +145,7 @@ def _find_function(
     path: Path,
     qualname: str | None,
     lineno: int | None,
+    fold_nested: bool = False,
 ) -> tuple[AnyFuncdef, str]:
     """Locate one function in ``path`` by qualname or line number.
 
@@ -113,7 +153,7 @@ def _find_function(
     """
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     funcs: list[tuple[AnyFuncdef, str]] = []
-    _collect(tree, "", funcs)
+    _collect(tree, "", funcs, fold_nested)
     if not funcs:
         raise LookupError(f"no functions found in {path}")
     if qualname is not None:
@@ -155,15 +195,15 @@ def _format_breakdown(
     return "\n".join(lines)
 
 
-def explain(target: str) -> int:
+def explain(target: str, fold_nested: bool = False) -> int:
     """Print a per-construct cognitive-complexity breakdown for one function."""
     path, qualname, lineno = _parse_target(target)
     try:
-        funcdef, qual = _find_function(path, qualname, lineno)
-    except (LookupError, OSError, SyntaxError) as exc:
+        funcdef, qual = _find_function(path, qualname, lineno, fold_nested)
+    except (LookupError, OSError, UnicodeDecodeError, SyntaxError, RecursionError) as exc:
         print(f"cococo: {exc}", file=sys.stderr)
         return 1
-    breakdown = get_cognitive_complexity_breakdown(funcdef)
+    breakdown = get_cognitive_complexity_breakdown(funcdef, fold_nested)
     print(_format_breakdown(funcdef, qual, path, breakdown))
     return 0
 
@@ -197,23 +237,60 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="apply safe guard-clause rewrites in place before reporting",
     )
+    parser.add_argument(
+        "--nested",
+        choices=("unit", "fold"),
+        default="unit",
+        help="score named nested defs as their own units (default) or fold them "
+        "into the enclosing function (pre-2.0.0 compatibility)",
+    )
     args = parser.parse_args(argv)
+    fold_nested = args.nested == "fold"
 
     if args.explain is not None:
-        return explain(args.explain)
+        return explain(args.explain, fold_nested)
     if not args.paths:
         parser.error("the following arguments are required: paths (or use --explain)")
 
-    if args.fix:
-        _apply_fixes(args.paths)
+    fix_failures = _apply_fixes(args.paths) if args.fix else 0
 
-    functions = scored_functions(args.paths)
+    functions, skipped = _scan(args.paths, fold_nested)
+    scan_code = _scan_exit_code(functions, args.max, args.as_json, args.min)
+    # A failed --fix write, or a file skipped under a gate, is a hard failure (2)
+    # regardless of whether the functions that *did* scan stayed within --max.
+    if fix_failures or (skipped and args.max is not None):
+        return 2
+    return scan_code
+
+
+def _scan_exit_code(
+    functions: list[ScoredFunction], max_: int | None, as_json: bool, min_: int
+) -> int:
     if not functions:
+        return _empty_scan_exit(max_, as_json, min_)
+    if as_json:
+        return _report_json(functions, max_, min_)
+    return _report(functions, max_, min_)
+
+
+def _empty_scan_exit(max_: int | None, as_json: bool, min_: int) -> int:
+    """No functions matched the paths. Stay honest in gate mode.
+
+    A ``--max`` gate that scans zero functions (a typo'd path, a renamed dir, a
+    glob that expanded to nothing) is a misconfiguration, not a pass: it returns
+    a distinct code (2) so CI cannot go green on a gate that gated nothing.
+    Without ``--max`` an empty scan is merely informational (exit 0). For
+    ``--json`` the stable empty report is still emitted so pipelines get valid
+    output either way.
+    """
+    if as_json:
+        print(to_json(build_report([], max_, min_)))
+    else:
         print("cococo: no Python functions found", file=sys.stderr)
-        return 0
-    if args.as_json:
-        return _report_json(functions, args.max, args.min)
-    return _report(functions, args.max, args.min)
+    if max_ is not None:
+        print("cococo: no functions scanned — check the paths given to the gate", file=sys.stderr)
+        return 2
+    return 0
 
 
 def _shown(functions: list[ScoredFunction], max_: int | None, min_: int) -> list[ScoredFunction]:
@@ -225,24 +302,40 @@ def _shown(functions: list[ScoredFunction], max_: int | None, min_: int) -> list
     )
 
 
-def _apply_fixes(paths: list[str]) -> None:
-    """Rewrite safe guard-clause patterns in place, reporting a one-line summary."""
+def _apply_fixes(paths: list[str]) -> int:
+    """Rewrite safe guard-clause patterns in place; return the write-failure count.
+
+    Each changed file is written atomically (a crash can't truncate the
+    original), and both read/parse errors and write errors are recorded-and-
+    skipped so one bad file never aborts the batch. Per-file outcomes go to
+    stderr; the returned count lets the caller fail the exit code when a write
+    did not land.
+    """
     changed = 0
     applied = 0
+    failed = 0
     for path in iter_python_files(paths):
         try:
             source = path.read_text(encoding="utf-8")
             new_source, count = fix_source(source)
-        except (OSError, UnicodeDecodeError, SyntaxError):
+        except (OSError, UnicodeDecodeError, SyntaxError, RecursionError):
             continue
-        if count:
-            path.write_text(new_source, encoding="utf-8")
-            changed += 1
-            applied += count
+        if not count:
+            continue
+        try:
+            atomic_write(path, new_source)
+        except OSError as exc:
+            print(f"cococo: FAILED to write {path}: {exc}", file=sys.stderr)
+            failed += 1
+            continue
+        print(f"cococo: fixed {path} ({count} guard(s))", file=sys.stderr)
+        changed += 1
+        applied += count
     print(
         f"cococo: applied {applied} guard-clause fix(es) across {changed} file(s)",
         file=sys.stderr,
     )
+    return failed
 
 
 def _report(functions: list[ScoredFunction], max_: int | None, min_: int) -> int:
