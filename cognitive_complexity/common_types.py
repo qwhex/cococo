@@ -1,6 +1,11 @@
+from __future__ import annotations
+
 import ast
 from pathlib import Path
-from typing import NamedTuple, TypeGuard
+from typing import TYPE_CHECKING, NamedTuple, TypeGuard
+
+if TYPE_CHECKING:
+    from cognitive_complexity.api import Contribution
 
 AnyFuncdef = ast.FunctionDef | ast.AsyncFunctionDef
 
@@ -18,8 +23,11 @@ def is_funcdef(node: ast.AST) -> TypeGuard[AnyFuncdef]:
 class ScoredFunction(NamedTuple):
     """A scored function plus the node it was scored from (for breakdowns/fixes).
 
-    ``ignored`` is true when the function's ``def`` line carries a
-    ``# cococo: ignore`` directive, which excludes it from the ``--max`` gate.
+    ``breakdown`` is the per-construct scoring computed once at discovery time;
+    ``score`` is its points sum. Carrying it avoids a second walk in the JSON
+    report and gate-suggestion paths. ``ignored`` is true when the function's
+    ``def`` line carries a ``# cococo: ignore`` directive, which excludes it from
+    the ``--max`` gate.
     """
 
     score: int
@@ -27,6 +35,7 @@ class ScoredFunction(NamedTuple):
     lineno: int
     qualname: str
     funcdef: AnyFuncdef
+    breakdown: list[Contribution]
     ignored: bool = False
 
 

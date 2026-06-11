@@ -28,11 +28,7 @@ import tokenize
 from collections.abc import Iterator
 from pathlib import Path
 
-from cognitive_complexity.api import (
-    Contribution,
-    get_cognitive_complexity,
-    get_cognitive_complexity_breakdown,
-)
+from cognitive_complexity.api import Contribution, get_cognitive_complexity_breakdown
 from cognitive_complexity.autofix import atomic_write, fix_source
 from cognitive_complexity.common_types import (
     AnyFuncdef,
@@ -152,17 +148,20 @@ def _score_file(path: Path, fold_nested: bool) -> list[ScoredFunction]:
     ignore = _ignored_lines(source)
     funcs: list[tuple[AnyFuncdef, str]] = []
     _collect(tree, "", funcs, fold_nested)
-    return [
-        ScoredFunction(
-            get_cognitive_complexity(funcdef, fold_nested),
-            path,
-            funcdef.lineno,
-            qualname,
-            funcdef,
-            funcdef.lineno in ignore,
-        )
-        for funcdef, qualname in funcs
-    ]
+    return [_score_one(funcdef, qualname, path, fold_nested, ignore) for funcdef, qualname in funcs]
+
+
+def _score_one(
+    funcdef: AnyFuncdef, qualname: str, path: Path, fold_nested: bool, ignore: set[int]
+) -> ScoredFunction:
+    # Compute the breakdown once and carry it on the result; the JSON report and
+    # gate-suggestion paths read ``.breakdown`` instead of re-walking the tree
+    # (the scalar score is just its points sum).
+    breakdown = get_cognitive_complexity_breakdown(funcdef, fold_nested)
+    score = sum(c.points for c in breakdown)
+    return ScoredFunction(
+        score, path, funcdef.lineno, qualname, funcdef, breakdown, funcdef.lineno in ignore
+    )
 
 
 def scored_functions(paths: list[str], fold_nested: bool = False) -> list[ScoredFunction]:
@@ -473,7 +472,7 @@ def _print_gate_failure(over: list[ScoredFunction], max_: int) -> None:
 
 
 def _print_suggestions(f: ScoredFunction, max_: int) -> None:
-    suggestions = suggest_refactors(f.funcdef, get_cognitive_complexity_breakdown(f.funcdef))
+    suggestions = suggest_refactors(f.funcdef, f.breakdown)
     print(f"  {f.path}:{f.lineno} {f.qualname} = {f.score} (>{max_})", file=sys.stderr)
     if not suggestions:
         print("    (no mechanical refactor found; split it by responsibility)", file=sys.stderr)

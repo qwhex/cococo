@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 
-from cognitive_complexity.api import get_cognitive_complexity_breakdown
 from cognitive_complexity.common_types import ScoredFunction, SkippedFile
 from cognitive_complexity.refactor import suggest_refactors
 
@@ -62,7 +61,7 @@ def build_report(
 def _func_entry(
     func: ScoredFunction, max_: int | None, baseline: dict[str, int] | None
 ) -> dict[str, object]:
-    breakdown = get_cognitive_complexity_breakdown(func.funcdef)
+    breakdown = func.breakdown
     suggestions = suggest_refactors(func.funcdef, breakdown)
     return {
         "path": str(func.path),
