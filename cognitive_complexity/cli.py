@@ -31,11 +31,9 @@ from cognitive_complexity.api import (
     get_cognitive_complexity_breakdown,
 )
 from cognitive_complexity.autofix import fix_source
-from cognitive_complexity.common_types import ScoredFunction
+from cognitive_complexity.common_types import AnyFuncdef, ScoredFunction
 from cognitive_complexity.refactor import suggest_refactors
 from cognitive_complexity.report import build_report, to_json
-
-AnyFunc = ast.FunctionDef | ast.AsyncFunctionDef
 
 
 def iter_python_files(paths: list[str]) -> Iterator[Path]:
@@ -47,7 +45,7 @@ def iter_python_files(paths: list[str]) -> Iterator[Path]:
             yield path
 
 
-def _collect(node: ast.AST, qualifier: str, out: list[tuple[AnyFunc, str]]) -> None:
+def _collect(node: ast.AST, qualifier: str, out: list[tuple[AnyFuncdef, str]]) -> None:
     """Every function, method, and named nested function, each as its own unit.
 
     ``qualifier`` is the enclosing-name prefix threaded down the recursion: a
@@ -76,7 +74,7 @@ def scored_functions(paths: list[str]) -> list[ScoredFunction]:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         except (SyntaxError, UnicodeDecodeError):
             continue
-        funcs: list[tuple[AnyFunc, str]] = []
+        funcs: list[tuple[AnyFuncdef, str]] = []
         _collect(tree, "", funcs)
         for funcdef, qualname in funcs:
             score = get_cognitive_complexity(funcdef)
@@ -108,13 +106,13 @@ def _find_function(
     path: Path,
     qualname: str | None,
     lineno: int | None,
-) -> tuple[AnyFunc, str]:
+) -> tuple[AnyFuncdef, str]:
     """Locate one function in ``path`` by qualname or line number.
 
     With neither selector, the file must contain exactly one function.
     """
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    funcs: list[tuple[AnyFunc, str]] = []
+    funcs: list[tuple[AnyFuncdef, str]] = []
     _collect(tree, "", funcs)
     if not funcs:
         raise LookupError(f"no functions found in {path}")
@@ -136,7 +134,7 @@ def _find_function(
 
 
 def _format_breakdown(
-    funcdef: AnyFunc,
+    funcdef: AnyFuncdef,
     qualname: str,
     path: Path,
     breakdown: list[Contribution],
