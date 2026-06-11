@@ -31,7 +31,7 @@ from cognitive_complexity.api import (
     get_cognitive_complexity_breakdown,
 )
 from cognitive_complexity.autofix import atomic_write, fix_source
-from cognitive_complexity.common_types import AnyFuncdef, ScoredFunction
+from cognitive_complexity.common_types import AnyFuncdef, ScoredFunction, SkippedFile
 from cognitive_complexity.refactor import suggest_refactors
 from cognitive_complexity.report import build_report, to_json
 
@@ -74,38 +74,54 @@ def _collect(
             _collect(child, qualifier, out, fold_nested)
 
 
-def _scan(paths: list[str], fold_nested: bool = False) -> tuple[list[ScoredFunction], list[Path]]:
-    """Score every function under ``paths``; also return the files that were skipped.
+def _scan(
+    paths: list[str], fold_nested: bool = False
+) -> tuple[list[ScoredFunction], list[SkippedFile], int]:
+    """Score every function under ``paths``; also return skipped files and scan count.
 
-    A file that cannot be read or parsed is reported on stderr and recorded as
-    skipped — never silently dropped — so the caller can fail a ``--max`` gate
-    rather than pass it on partial coverage. The ``OSError`` in the caught tuple
-    covers permission-denied / vanished files (previously those aborted the scan).
+    A file that cannot be read, parsed, or scored is reported on stderr and
+    recorded as skipped — never silently dropped — so the caller can fail a
+    ``--max`` gate and the JSON report can expose coverage, rather than launder a
+    partial scan as clean. ``files_scanned`` counts the files that parsed.
     """
-    outcomes = [_score_or_skip(path, fold_nested) for path in iter_python_files(paths)]
+    files = list(iter_python_files(paths))
+    outcomes = [_score_or_skip(path, fold_nested) for path in files]
     results = [func for scored, _ in outcomes for func in scored]
-    skipped = [path for _, path in outcomes if path is not None]
-    return results, skipped
+    skipped = [info for _, info in outcomes if info is not None]
+    return results, skipped, len(files) - len(skipped)
 
 
-def _score_or_skip(path: Path, fold_nested: bool) -> tuple[list[ScoredFunction], Path | None]:
+def _score_or_skip(
+    path: Path, fold_nested: bool
+) -> tuple[list[ScoredFunction], SkippedFile | None]:
     """Score one file, or report+record it as skipped on any unscoreable failure.
 
-    Returns ``(scored, None)`` on success or ``([], path)`` on failure. Catches
-    read/parse errors and ``RecursionError`` from a pathologically deep AST (a
-    crafted subscript chain, a huge ``elif`` ladder) so one bad file is skipped
-    loudly rather than aborting the whole run.
+    Returns ``(scored, None)`` on success or ``([], SkippedFile)`` on failure.
+    Catches read/parse errors and ``RecursionError`` from a pathologically deep
+    AST (a crafted subscript chain, a huge ``elif`` ladder) so one bad file is
+    skipped loudly rather than aborting the whole run.
     """
     try:
         return _score_file(path, fold_nested), None
     except (OSError, UnicodeDecodeError, SyntaxError, RecursionError) as exc:
-        print(f"cococo: skipped {path}: {type(exc).__name__}: {exc}", file=sys.stderr)
-        return [], path
+        reason = f"{type(exc).__name__}: {exc}"
+        print(f"cococo: skipped {path}: {reason}", file=sys.stderr)
+        return [], SkippedFile(path, reason)
+
+
+def _parse_file(path: Path) -> ast.Module:
+    """Read ``path`` as UTF-8 and parse it to an AST module.
+
+    The single read+parse site shared by the scanner and ``--explain``; it raises
+    ``OSError`` / ``UnicodeDecodeError`` / ``SyntaxError`` for the caller to map
+    to a skip or a clean message — one policy, not three drifting copies.
+    """
+    return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
 
 def _score_file(path: Path, fold_nested: bool) -> list[ScoredFunction]:
     """Parse and score every function in one file (raises on read/parse/score failure)."""
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    tree = _parse_file(path)
     funcs: list[tuple[AnyFuncdef, str]] = []
     _collect(tree, "", funcs, fold_nested)
     return [
@@ -151,7 +167,7 @@ def _find_function(
 
     With neither selector, the file must contain exactly one function.
     """
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    tree = _parse_file(path)
     funcs: list[tuple[AnyFuncdef, str]] = []
     _collect(tree, "", funcs, fold_nested)
     if not funcs:
@@ -254,8 +270,8 @@ def main(argv: list[str] | None = None) -> int:
 
     fix_failures = _apply_fixes(args.paths) if args.fix else 0
 
-    functions, skipped = _scan(args.paths, fold_nested)
-    scan_code = _scan_exit_code(functions, args.max, args.as_json, args.min)
+    functions, skipped, scanned = _scan(args.paths, fold_nested)
+    scan_code = _scan_exit_code(functions, skipped, scanned, args.max, args.as_json, args.min)
     # A failed --fix write, or a file skipped under a gate, is a hard failure (2)
     # regardless of whether the functions that *did* scan stayed within --max.
     if fix_failures or (skipped and args.max is not None):
@@ -264,29 +280,31 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _scan_exit_code(
-    functions: list[ScoredFunction], max_: int | None, as_json: bool, min_: int
+    functions: list[ScoredFunction],
+    skipped: list[SkippedFile],
+    scanned: int,
+    max_: int | None,
+    as_json: bool,
+    min_: int,
 ) -> int:
-    if not functions:
-        return _empty_scan_exit(max_, as_json, min_)
     if as_json:
-        return _report_json(functions, max_, min_)
+        return _report_json(functions, skipped, scanned, max_, min_)
+    if not functions:
+        return _empty_scan_exit(max_)
     return _report(functions, max_, min_)
 
 
-def _empty_scan_exit(max_: int | None, as_json: bool, min_: int) -> int:
-    """No functions matched the paths. Stay honest in gate mode.
+def _empty_scan_exit(max_: int | None) -> int:
+    """No functions matched the paths (text mode). Stay honest in gate mode.
 
     A ``--max`` gate that scans zero functions (a typo'd path, a renamed dir, a
     glob that expanded to nothing) is a misconfiguration, not a pass: it returns
     a distinct code (2) so CI cannot go green on a gate that gated nothing.
-    Without ``--max`` an empty scan is merely informational (exit 0). For
-    ``--json`` the stable empty report is still emitted so pipelines get valid
-    output either way.
+    Without ``--max`` an empty scan is merely informational (exit 0). (The
+    ``--json`` empty case is handled by :func:`_report_json`, which still emits a
+    valid report.)
     """
-    if as_json:
-        print(to_json(build_report([], max_, min_)))
-    else:
-        print("cococo: no Python functions found", file=sys.stderr)
+    print("cococo: no Python functions found", file=sys.stderr)
     if max_ is not None:
         print("cococo: no functions scanned — check the paths given to the gate", file=sys.stderr)
         return 2
@@ -353,9 +371,17 @@ def _report(functions: list[ScoredFunction], max_: int | None, min_: int) -> int
     return 0
 
 
-def _report_json(functions: list[ScoredFunction], max_: int | None, min_: int) -> int:
-    report = build_report(_shown(functions, max_, min_), max_, min_)
+def _report_json(
+    functions: list[ScoredFunction],
+    skipped: list[SkippedFile],
+    scanned: int,
+    max_: int | None,
+    min_: int,
+) -> int:
+    report = build_report(_shown(functions, max_, min_), max_, min_, skipped, scanned)
     print(to_json(report))
+    if not functions and max_ is not None:
+        return 2  # gate scanned nothing — fail loud even in JSON mode
     return 1 if max_ is not None and report["exceeded"] else 0
 
 

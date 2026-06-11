@@ -10,18 +10,32 @@ from __future__ import annotations
 import json
 
 from cognitive_complexity.api import get_cognitive_complexity_breakdown
-from cognitive_complexity.common_types import ScoredFunction
+from cognitive_complexity.common_types import ScoredFunction, SkippedFile
 from cognitive_complexity.refactor import suggest_refactors
 
 
-def build_report(funcs: list[ScoredFunction], max_: int | None, min_: int) -> dict[str, object]:
-    """Assemble the JSON-able report for the already-filtered ``funcs``."""
+def build_report(
+    funcs: list[ScoredFunction],
+    max_: int | None,
+    min_: int,
+    skipped: list[SkippedFile],
+    files_scanned: int,
+) -> dict[str, object]:
+    """Assemble the JSON-able report for the already-filtered ``funcs``.
+
+    ``files_scanned`` and ``skipped`` make scan coverage explicit so a consumer
+    can tell a clean scan from a partial one: ``"exceeded": 0`` over a tree where
+    files failed to parse is no longer indistinguishable from a genuinely clean
+    tree.
+    """
     entries = [_func_entry(func, max_) for func in funcs]
     return {
         "max": max_,
         "min": min_,
         "functions": entries,
         "exceeded": sum(1 for entry in entries if entry["over"]),
+        "files_scanned": files_scanned,
+        "skipped": [{"path": str(s.path), "reason": s.reason} for s in skipped],
     }
 
 

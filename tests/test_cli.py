@@ -183,6 +183,18 @@ def test_json_output_without_max_exits_zero(tmp_path, capsys):
     assert report["exceeded"] == 0
 
 
+def test_json_report_includes_scan_coverage(tmp_path, capsys):
+    # A pipeline must be able to tell a clean scan from a partial one.
+    _write(tmp_path, "good.py", NESTED)
+    _write(tmp_path, "bad.py", "def f(:\n    pass\n")
+    assert main([str(tmp_path), "--json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["files_scanned"] == 1
+    assert len(report["skipped"]) == 1
+    assert report["skipped"][0]["path"].endswith("bad.py")
+    assert "SyntaxError" in report["skipped"][0]["reason"]
+
+
 def test_fix_rewrites_file_and_lowers_score(tmp_path, capsys):
     path = _write(tmp_path, "m.py", FIXABLE)
     before = {q: s for s, _, _, q in score_paths([str(path)])}
@@ -190,7 +202,9 @@ def test_fix_rewrites_file_and_lowers_score(tmp_path, capsys):
     after = {q: s for s, _, _, q in score_paths([str(path)])}
     assert after["f"] < before["f"]
     assert "if not (x):" in path.read_text()
-    assert "guard-clause fix(es)" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "guard-clause fix(es)" in err  # aggregate rollup
+    assert f"fixed {path}" in err  # per-file audit trail (ae65)
 
 
 def test_fix_then_gate_can_pass_after_rewrite(tmp_path):

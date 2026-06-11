@@ -13,3 +13,10 @@ class ScoredFunction(NamedTuple):
     lineno: int
     qualname: str
     funcdef: AnyFuncdef
+
+
+class SkippedFile(NamedTuple):
+    """A file the scanner could not read, parse, or score, with the reason why."""
+
+    path: Path
+    reason: str

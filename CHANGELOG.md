@@ -7,6 +7,14 @@ All notable changes to cococo are documented here. The format is based on
 a score — even a bug fix — is a major release, because it can flip a downstream
 `--max` gate red or green.
 
+## [3.1.0] - 2026-06-11
+
+### Added
+
+- `--json` now reports `files_scanned` and `skipped` (`[{path, reason}]`) so a
+  pipeline can distinguish a complete scan from a partial one — previously a scan
+  that silently skipped unparseable files looked identical to a clean tree.
+
 ## [3.0.0] - 2026-06-11
 
 This batch contains one score-changing fix (the recursion correction below), so
