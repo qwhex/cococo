@@ -169,6 +169,19 @@ def test_baseline_missing_is_created_and_passes(tmp_path, capsys):
     assert any(k.endswith("::f") for k in json.loads(bl.read_text()))
 
 
+def test_baseline_missing_is_not_created_when_scan_skips_file(tmp_path, capsys):
+    _write(tmp_path, "good.py", FLAT)
+    _write(tmp_path, "bad.py", "def f(:\n    pass\n")
+    bl = tmp_path / "baseline.json"
+
+    assert main([str(tmp_path), "--max", "5", "--baseline", str(bl)]) == 2
+
+    err = capsys.readouterr().err
+    assert "skipped" in err
+    assert "wrote baseline" not in err
+    assert not bl.exists()
+
+
 def test_baseline_grandfathers_recorded_offender(tmp_path):
     _write(tmp_path, "m.py", NESTED)
     bl = tmp_path / "baseline.json"

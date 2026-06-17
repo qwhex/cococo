@@ -130,7 +130,11 @@ def main(argv: list[str] | None = None) -> int:
     fix_failures = _apply_fixes(args.paths) if args.fix else 0
 
     functions, skipped, scanned = scan(args.paths, fold_nested)
-    baseline = _load_or_create_baseline(Path(args.baseline), functions) if args.baseline else None
+    baseline = None
+    if args.baseline:
+        baseline_path = Path(args.baseline)
+        if baseline_path.exists() or (functions and not skipped):
+            baseline = _load_or_create_baseline(baseline_path, functions)
     _warn_unused_ignores(functions, args.max)
     scan_code = _scan_exit_code(
         functions, skipped, scanned, args.max, args.as_json, args.min, baseline
