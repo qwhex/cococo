@@ -210,8 +210,22 @@ call graph rather than the single-function AST this tool works from.
 
 ## Development
 
+To develop `cococo`, first set up and activate a virtual environment so the toolchain (`python`, `pytest`, etc.) is available on your PATH:
+
 ```bash
+# With standard pip/venv:
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements_dev.txt
+
+# Or with uv:
+uv venv
+uv pip install -r requirements_dev.txt
+```
+
+Once the environment is active (or by prefixing commands with `uv run`, e.g., `uv run just test`), you can use the `just` recipes:
+
+```bash
 just install-hooks  # pre-push runs `just check` (the same gate as CI)
 just check          # format-check + lint + type-check + complexity + tests + readme lint
 just test           # tests with coverage

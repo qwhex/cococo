@@ -227,3 +227,46 @@ def test_estimated_complexity_after_clamped_at_zero():
     # dispatch reduction == 3, which exceeds total, so max(0, 1-3) must be 0.
     [dispatch] = [s for s in _suggest(_FOUR_CASE_MATCH) if s.kind == "split_dispatcher"]
     assert dispatch.estimated_complexity_after == 0  # clamp: never negative
+
+
+def test_complex_structural_match_does_not_suggest_dispatcher():
+    # A match statement with 4 or more cases should not trigger split_dispatcher
+    # if it relies on structural pattern matching (e.g. mapping patterns),
+    # because they cannot be cleanly replaced by a dictionary dispatch table.
+    suggestions = _suggest("""
+    def process(event):
+        match event:
+            case {"type": "user", "id": int(uid)}:
+                return uid
+            case {"type": "post", "title": str(title)}:
+                return title
+            case {"type": "comment", "text": str(text)}:
+                return text
+            case {"type": "like", "user_id": int(uid)}:
+                return uid
+            case _:
+                return 0
+    """)
+    assert "split_dispatcher" not in _kinds(suggestions)
+
+
+def test_highly_coupled_block_does_not_suggest_extract_helper():
+    # If extracting a block would require passing and returning too many variables
+    # (Data Clump / Long Parameter List anti-patterns), the suggestion is suppressed.
+    suggestions = _suggest("""
+    def process(a, b, c, items):
+        d = 0
+        e = 0
+        # Highly coupled region: mutates/reads 5 outer variables.
+        for x in items:
+            if x:
+                a += 1
+                b -= 1
+                c *= 2
+                d = a + b
+                e = c + d
+                if a > 10:
+                    d += 1
+        return a, b, c, d, e
+    """)
+    assert "extract_helper" not in _kinds(suggestions)
