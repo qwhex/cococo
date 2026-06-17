@@ -134,17 +134,11 @@ def main(argv: list[str] | None = None) -> int:
     fix_failures = _apply_fixes(args.paths) if args.fix else 0
 
     functions, skipped, scanned = scan(args.paths, fold_nested)
-    baseline = None
-    baseline_root = None
-    if args.baseline:
-        baseline_path = Path(args.baseline)
-        baseline_root = baseline_path.parent
-        if baseline_path.exists() or (functions and not skipped):
-            try:
-                baseline = _load_or_create_baseline(baseline_path, functions)
-            except BaselineError as exc:
-                print(f"cococo: {exc}", file=sys.stderr)
-                return 2
+    try:
+        baseline, baseline_root = _baseline_for_scan(args.baseline, functions, skipped)
+    except BaselineError as exc:
+        print(f"cococo: {exc}", file=sys.stderr)
+        return 2
     _warn_unused_ignores(functions, args.max)
     scan_code = _scan_exit_code(
         functions, skipped, scanned, args.max, args.as_json, args.min, baseline, baseline_root
@@ -154,6 +148,21 @@ def main(argv: list[str] | None = None) -> int:
     if fix_failures or (skipped and args.max is not None):
         return 2
     return scan_code
+
+
+def _baseline_for_scan(
+    raw_path: str | None,
+    functions: list[ScoredFunction],
+    skipped: list[SkippedFile],
+) -> tuple[dict[str, int] | None, Path | None]:
+    """Load/create the baseline only when the scan is trusted enough to do so."""
+    if raw_path is None:
+        return None, None
+    path = Path(raw_path)
+    root = path.parent
+    if not path.exists() and (not functions or skipped):
+        return None, root
+    return _load_or_create_baseline(path, functions), root
 
 
 def _load_or_create_baseline(path: Path, functions: list[ScoredFunction]) -> dict[str, int]:

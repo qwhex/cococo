@@ -186,17 +186,17 @@ def _is_extractable_region(region: ast.stmt) -> bool:
 def _attribute_mutation_count(region: ast.stmt) -> int:
     attrs: set[str] = set()
     for node in ast.walk(region):
-        target: ast.AST | None = None
-        if isinstance(node, ast.AugAssign | ast.NamedExpr):
-            target = node.target
-        elif isinstance(node, ast.Assign | ast.AnnAssign):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            for item in targets:
-                attrs.update(_stored_attribute_keys(item))
-            continue
-        if target is not None:
+        for target in _mutation_targets(node):
             attrs.update(_stored_attribute_keys(target))
     return len(attrs)
+
+
+def _mutation_targets(node: ast.AST) -> list[ast.AST]:
+    if isinstance(node, ast.Assign):
+        return list(node.targets)
+    if isinstance(node, ast.AnnAssign | ast.AugAssign | ast.NamedExpr):
+        return [node.target]
+    return []
 
 
 def _stored_attribute_keys(node: ast.AST) -> set[str]:
@@ -209,34 +209,45 @@ def _stored_attribute_keys(node: ast.AST) -> set[str]:
 
 def _analyze_coupling(funcdef: AnyFuncdef, region: ast.stmt) -> int:
     defined_before = {node.arg for node in ast.walk(funcdef.args) if isinstance(node, ast.arg)}
-    used_after = set()
-    region_loads = set()
-    region_stores = set()
+    used_after: set[str] = set()
+    region_loads: set[str] = set()
+    region_stores: set[str] = set()
+    buckets = {
+        "defined_before": defined_before,
+        "used_after": used_after,
+        "region_loads": region_loads,
+        "region_stores": region_stores,
+    }
 
     start = region.lineno
     end = region.end_lineno or start
 
     for node in ast.walk(funcdef):
-        if isinstance(node, ast.Name):
-            lineno = getattr(node, "lineno", 0)
-            if lineno == 0:
-                continue
-
-            if lineno < start:
-                if isinstance(node.ctx, ast.Store):
-                    defined_before.add(node.id)
-            elif lineno > end:
-                if isinstance(node.ctx, ast.Load):
-                    used_after.add(node.id)
-            else:
-                if isinstance(node.ctx, ast.Load):
-                    region_loads.add(node.id)
-                elif isinstance(node.ctx, ast.Store):
-                    region_stores.add(node.id)
+        role = _name_coupling_role(node, start, end)
+        if role is not None:
+            bucket, name = role
+            buckets[bucket].add(name)
 
     inputs = region_loads & defined_before
     outputs = region_stores & used_after
     return len(inputs) + len(outputs)
+
+
+def _name_coupling_role(node: ast.AST, start: int, end: int) -> tuple[str, str] | None:
+    if not isinstance(node, ast.Name):
+        return None
+    lineno = getattr(node, "lineno", 0)
+    if lineno == 0:
+        return None
+    if lineno < start and isinstance(node.ctx, ast.Store):
+        return "defined_before", node.id
+    if lineno > end and isinstance(node.ctx, ast.Load):
+        return "used_after", node.id
+    if start <= lineno <= end and isinstance(node.ctx, ast.Load):
+        return "region_loads", node.id
+    if start <= lineno <= end and isinstance(node.ctx, ast.Store):
+        return "region_stores", node.id
+    return None
 
 
 def _dispatch_reduction(region: ast.stmt) -> int:
