@@ -39,6 +39,10 @@ from cognitive_complexity.refactor import suggest_refactors
 from cognitive_complexity.report import build_report, func_key, is_over, to_json
 
 
+class BaselineError(Exception):
+    """The baseline file could not be trusted."""
+
+
 def _format_breakdown(
     funcdef: AnyFuncdef,
     qualname: str,
@@ -131,13 +135,19 @@ def main(argv: list[str] | None = None) -> int:
 
     functions, skipped, scanned = scan(args.paths, fold_nested)
     baseline = None
+    baseline_root = None
     if args.baseline:
         baseline_path = Path(args.baseline)
+        baseline_root = baseline_path.parent
         if baseline_path.exists() or (functions and not skipped):
-            baseline = _load_or_create_baseline(baseline_path, functions)
+            try:
+                baseline = _load_or_create_baseline(baseline_path, functions)
+            except BaselineError as exc:
+                print(f"cococo: {exc}", file=sys.stderr)
+                return 2
     _warn_unused_ignores(functions, args.max)
     scan_code = _scan_exit_code(
-        functions, skipped, scanned, args.max, args.as_json, args.min, baseline
+        functions, skipped, scanned, args.max, args.as_json, args.min, baseline, baseline_root
     )
     # A failed --fix write, or a file skipped under a gate, is a hard failure (2)
     # regardless of whether the functions that *did* scan stayed within --max.
@@ -153,12 +163,26 @@ def _load_or_create_baseline(path: Path, functions: list[ScoredFunction]) -> dic
     first run grandfathers the whole codebase; later runs compare against it.
     """
     if path.exists():
-        loaded: dict[str, int] = json.loads(path.read_text(encoding="utf-8"))
-        return loaded
-    baseline = {func_key(f): f.score for f in functions}
-    path.write_text(json.dumps(baseline, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise BaselineError(f"invalid baseline {path}: {exc}") from exc
+        return _validate_baseline(path, loaded)
+    baseline = {func_key(f, path.parent): f.score for f in functions}
+    try:
+        path.write_text(json.dumps(baseline, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    except OSError as exc:
+        raise BaselineError(f"invalid baseline {path}: {exc}") from exc
     print(f"cococo: wrote baseline for {len(baseline)} function(s) to {path}", file=sys.stderr)
     return baseline
+
+
+def _validate_baseline(path: Path, loaded: object) -> dict[str, int]:
+    if not isinstance(loaded, dict) or any(
+        not isinstance(key, str) or type(value) is not int for key, value in loaded.items()
+    ):
+        raise BaselineError(f"invalid baseline {path}: expected dict[str, int]")
+    return loaded
 
 
 def _warn_unused_ignores(functions: list[ScoredFunction], max_: int | None) -> None:
@@ -182,12 +206,13 @@ def _scan_exit_code(
     as_json: bool,
     min_: int,
     baseline: dict[str, int] | None,
+    baseline_root: Path | None,
 ) -> int:
     if as_json:
-        return _report_json(functions, skipped, scanned, max_, min_, baseline)
+        return _report_json(functions, skipped, scanned, max_, min_, baseline, baseline_root)
     if not functions:
         return _empty_scan_exit(max_)
-    return _report(functions, max_, min_, baseline)
+    return _report(functions, max_, min_, baseline, baseline_root)
 
 
 def _empty_scan_exit(max_: int | None) -> int:
@@ -253,7 +278,11 @@ def _apply_fixes(paths: list[str]) -> int:
 
 
 def _report(
-    functions: list[ScoredFunction], max_: int | None, min_: int, baseline: dict[str, int] | None
+    functions: list[ScoredFunction],
+    max_: int | None,
+    min_: int,
+    baseline: dict[str, int] | None,
+    baseline_root: Path | None,
 ) -> int:
     """Print the scored functions and, when ``max_`` is set, gate on it."""
     for f in _shown(functions, max_, min_):
@@ -261,7 +290,7 @@ def _report(
 
     if max_ is None:
         return 0
-    over = [f for f in functions if is_over(f, max_, baseline)]
+    over = [f for f in functions if is_over(f, max_, baseline, baseline_root)]
     if over:
         _print_gate_failure(over, max_)
         return 1
@@ -276,8 +305,17 @@ def _report_json(
     max_: int | None,
     min_: int,
     baseline: dict[str, int] | None,
+    baseline_root: Path | None,
 ) -> int:
-    report = build_report(_shown(functions, max_, min_), max_, min_, skipped, scanned, baseline)
+    report = build_report(
+        _shown(functions, max_, min_),
+        max_,
+        min_,
+        skipped,
+        scanned,
+        baseline,
+        baseline_root,
+    )
     print(to_json(report))
     if not functions and max_ is not None:
         return 2  # gate scanned nothing — fail loud even in JSON mode

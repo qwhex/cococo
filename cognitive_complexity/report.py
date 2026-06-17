@@ -8,17 +8,34 @@ the refactor suggestions. The shape is stable and flat enough to filter with
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from cognitive_complexity.common_types import ScoredFunction, SkippedFile
 from cognitive_complexity.refactor import suggest_refactors
 
 
-def func_key(func: ScoredFunction) -> str:
+def _path_key(path: Path, root: Path | None) -> str:
+    if root is None:
+        return str(path)
+    resolved_path = path.resolve()
+    resolved_root = root.resolve()
+    try:
+        return resolved_path.relative_to(resolved_root).as_posix()
+    except ValueError:
+        return resolved_path.as_posix()
+
+
+def func_key(func: ScoredFunction, root: Path | None = None) -> str:
     """Stable identity for a function across runs, used as the baseline key."""
-    return f"{func.path}::{func.qualname}"
+    return f"{_path_key(func.path, root)}::{func.qualname}"
 
 
-def is_over(func: ScoredFunction, max_: int | None, baseline: dict[str, int] | None) -> bool:
+def is_over(
+    func: ScoredFunction,
+    max_: int | None,
+    baseline: dict[str, int] | None,
+    baseline_root: Path | None = None,
+) -> bool:
     """Whether ``func`` fails the gate: over ``--max``, not ignored, not grandfathered.
 
     With a ``baseline`` the effective ceiling for a recorded function is the
@@ -28,7 +45,11 @@ def is_over(func: ScoredFunction, max_: int | None, baseline: dict[str, int] | N
     """
     if max_ is None or func.ignored:
         return False
-    ceiling = max(max_, baseline.get(func_key(func), max_)) if baseline is not None else max_
+    if baseline is None:
+        ceiling = max_
+    else:
+        recorded = baseline.get(func_key(func, baseline_root), baseline.get(func_key(func), max_))
+        ceiling = max(max_, recorded)
     return func.score > ceiling
 
 
@@ -39,6 +60,7 @@ def build_report(
     skipped: list[SkippedFile],
     files_scanned: int,
     baseline: dict[str, int] | None = None,
+    baseline_root: Path | None = None,
 ) -> dict[str, object]:
     """Assemble the JSON-able report for the already-filtered ``funcs``.
 
@@ -47,7 +69,7 @@ def build_report(
     files failed to parse is no longer indistinguishable from a genuinely clean
     tree. ``over``/``exceeded`` honor ``# cococo: ignore`` and the baseline.
     """
-    entries = [_func_entry(func, max_, baseline) for func in funcs]
+    entries = [_func_entry(func, max_, baseline, baseline_root) for func in funcs]
     return {
         "max": max_,
         "min": min_,
@@ -59,7 +81,10 @@ def build_report(
 
 
 def _func_entry(
-    func: ScoredFunction, max_: int | None, baseline: dict[str, int] | None
+    func: ScoredFunction,
+    max_: int | None,
+    baseline: dict[str, int] | None,
+    baseline_root: Path | None,
 ) -> dict[str, object]:
     breakdown = func.breakdown
     suggestions = suggest_refactors(func.funcdef, breakdown)
@@ -68,7 +93,7 @@ def _func_entry(
         "lineno": func.lineno,
         "qualname": func.qualname,
         "complexity": func.score,
-        "over": is_over(func, max_, baseline),
+        "over": is_over(func, max_, baseline, baseline_root),
         "breakdown": [c._asdict() for c in breakdown],
         "suggestions": [s._asdict() for s in suggestions],
     }

@@ -1,5 +1,6 @@
 import ast
 import json
+from pathlib import Path
 
 import pytest
 
@@ -187,6 +188,62 @@ def test_baseline_grandfathers_recorded_offender(tmp_path):
     bl = tmp_path / "baseline.json"
     bl.write_text(json.dumps({f"{tmp_path / 'm.py'}::f": 10}))  # recorded at current score
     assert main([str(tmp_path), "--max", "5", "--baseline", str(bl)]) == 0
+
+
+def test_malformed_baseline_returns_untrusted_exit(tmp_path, capsys):
+    _write(tmp_path, "m.py", FLAT)
+    bl = tmp_path / "baseline.json"
+    bl.write_text("not json")
+
+    assert main([str(tmp_path), "--max", "5", "--baseline", str(bl)]) == 2
+
+    err = capsys.readouterr().err.lower()
+    assert "baseline" in err
+    assert "invalid" in err
+
+
+def test_invalid_baseline_shape_returns_untrusted_exit(tmp_path, capsys):
+    _write(tmp_path, "m.py", FLAT)
+    bl = tmp_path / "baseline.json"
+    bl.write_text(json.dumps({f"{tmp_path / 'm.py'}::g": "0"}))
+
+    assert main([str(tmp_path), "--max", "5", "--baseline", str(bl)]) == 2
+
+    err = capsys.readouterr().err.lower()
+    assert "baseline" in err
+    assert "dict[str, int]" in err
+
+
+def test_unreadable_baseline_returns_untrusted_exit(tmp_path, capsys, monkeypatch):
+    _write(tmp_path, "m.py", FLAT)
+    bl = tmp_path / "baseline.json"
+    bl.write_text("{}")
+    original_read_text = Path.read_text
+
+    def fail_baseline_read(self: Path, *args: object, **kwargs: object) -> str:
+        if self == bl:
+            raise OSError("permission denied")
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", fail_baseline_read)
+
+    assert main([str(tmp_path), "--max", "5", "--baseline", str(bl)]) == 2
+
+    err = capsys.readouterr().err.lower()
+    assert "baseline" in err
+    assert "permission denied" in err
+
+
+def test_baseline_keys_match_relative_and_absolute_invocations(tmp_path, monkeypatch):
+    src = tmp_path / "src"
+    src.mkdir()
+    _write(src, "m.py", NESTED)
+    bl = tmp_path / "baseline.json"
+
+    monkeypatch.chdir(tmp_path)
+    assert main(["src", "--max", "5", "--baseline", "baseline.json"]) == 0
+    assert "src/m.py::f" in json.loads(bl.read_text())
+    assert main([str(src), "--max", "5", "--baseline", str(bl)]) == 0
 
 
 def test_baseline_fails_when_function_regresses_above_recorded(tmp_path):
