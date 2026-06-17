@@ -7,6 +7,37 @@ All notable changes to cococo are documented here. The format is based on
 a score — even a bug fix — is a major release, because it can flip a downstream
 `--max` gate red or green.
 
+## [3.4.0] - 2026-06-17
+
+### Added
+
+- Documented `--nested` and `--baseline` CLI options, exit codes, and the
+  `# cococo: ignore` directive in the README. (`dc48f39`)
+- Validation and error handling for baseline files, with exit code 2 for
+  untrusted baselines. (`e81df65`)
+- Coupling analysis in refactor suggestions, so extractions with high
+  parameter/return overhead are no longer suggested. (`7a1514e`)
+
+### Changed
+
+- Refactor suggestions now suppress unsafe patterns: predicate extraction for
+  walrus operators, dispatcher suggestions for ordered comparisons or
+  side-effectful conditions, and helper extraction for regions with control-flow
+  statements or excessive attribute mutations. (`ddf31ab`)
+- Baseline function keys now use relative paths when possible, for consistency
+  across relative and absolute invocations. (`e81df65`)
+- Baseline creation is skipped when the scan skips files or finds no functions,
+  avoiding partial baselines. (`efa6928`)
+- Reduced cognitive complexity of the refactor-analysis internals (no behavior
+  change). (`3766ace`)
+
+### Fixed
+
+- Data clump refactor suggestions now analyze variable coupling across region
+  boundaries instead of over-suggesting. (`7a1514e`)
+- Structural match pattern detection no longer suggests dispatcher refactoring
+  for patterns with guards or complex destructuring. (`7a1514e`)
+
 ## [3.3.0] - 2026-06-11
 
 ### Added
