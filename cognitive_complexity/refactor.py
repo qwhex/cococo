@@ -236,9 +236,7 @@ def _analyze_coupling(funcdef: AnyFuncdef, region: ast.stmt) -> int:
 def _name_coupling_role(node: ast.AST, start: int, end: int) -> tuple[str, str] | None:
     if not isinstance(node, ast.Name):
         return None
-    lineno = getattr(node, "lineno", 0)
-    if lineno == 0:
-        return None
+    lineno = node.lineno
     if lineno < start and isinstance(node.ctx, ast.Store):
         return "defined_before", node.id
     if lineno > end and isinstance(node.ctx, ast.Load):

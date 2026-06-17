@@ -270,3 +270,116 @@ def test_highly_coupled_block_does_not_suggest_extract_helper():
         return a, b, c, d, e
     """)
     assert "extract_helper" not in _kinds(suggestions)
+
+
+def test_attribute_heavy_region_counts_distinct_attributes():
+    # A region that reassigns many distinct attributes is treated like a data
+    # clump (high mutation surface), so plain helper extraction is suppressed
+    # even though the block is big enough to otherwise qualify. This exercises
+    # plain, attribute-target, and tuple-target assignment handling.
+    suggestions = _suggest("""
+    def f(obj, items):
+        if obj.flag:
+            note()
+        for x in items:
+            if x > 0:
+                obj.a = x
+                obj.b, obj.c = x, x
+                if x > 5:
+                    obj.d = x
+                    if x > 10:
+                        obj.e = x + 1
+        return obj
+    """)
+    assert "extract_helper" not in _kinds(suggestions)
+
+
+def test_equality_chain_with_mixed_subjects_is_not_a_dispatcher():
+    # The arms compare different subjects (a vs b), so the chain is not a clean
+    # single-subject dispatch and no split_dispatcher is offered.
+    assert "split_dispatcher" not in _kinds(
+        _suggest("""
+    def f(a, b):
+        if a == 1:
+            return 1
+        elif b == 2:
+            return 2
+        elif a == 3:
+            return 3
+        elif a == 4:
+            return 4
+    """)
+    )
+
+
+def test_dispatcher_recognizes_constant_on_left():
+    # `"a" == cmd` is the same equality as `cmd == "a"`; the chain still reads as
+    # a single-subject dispatch on `cmd`.
+    assert "split_dispatcher" in _kinds(
+        _suggest("""
+    def f(cmd):
+        if "a" == cmd:
+            return 1
+        elif "b" == cmd:
+            return 2
+        elif "c" == cmd:
+            return 3
+        elif "d" == cmd:
+            return 4
+    """)
+    )
+
+
+def test_chain_comparing_two_names_is_not_a_dispatcher():
+    # `x == y` has no constant key on either side, so it is not a dispatchable arm.
+    assert "split_dispatcher" not in _kinds(
+        _suggest("""
+    def f(x, y):
+        if x == 1:
+            return 1
+        elif x == y:
+            return 2
+        elif x == 3:
+            return 3
+        elif x == 4:
+            return 4
+    """)
+    )
+
+
+def test_match_with_guard_is_not_a_dispatcher():
+    # A guard makes a case structural (not a plain value lookup), so the match is
+    # not offered for dispatch-table refactoring.
+    assert "split_dispatcher" not in _kinds(
+        _suggest("""
+    def f(cmd):
+        match cmd:
+            case "a" if cmd:
+                return 1
+            case "b":
+                return 2
+            case "c":
+                return 3
+            case "d":
+                return 4
+    """)
+    )
+
+
+def test_match_with_or_patterns_is_still_a_dispatcher():
+    # `case "a" | "b"` is a simple OR of value patterns, so the match still reads
+    # as a value dispatch and the suggestion stands.
+    assert "split_dispatcher" in _kinds(
+        _suggest("""
+    def f(cmd):
+        match cmd:
+            case "a" | "b":
+                return 1
+            case "c":
+                return 2
+            case "d":
+                return 3
+            case "e":
+                return 4
+    """)
+    )

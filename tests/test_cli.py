@@ -258,6 +258,29 @@ def test_baseline_requires_max(tmp_path):
         main([str(tmp_path), "--baseline", str(tmp_path / "b.json")])
 
 
+def test_baseline_write_failure_is_reported_as_error(tmp_path, capsys):
+    # Baseline path under a non-existent directory: the create write fails, which
+    # surfaces as a BaselineError (exit code 2), not a crash.
+    _write(tmp_path, "m.py", NESTED)
+    bl = tmp_path / "no_such_dir" / "baseline.json"
+    assert main([str(tmp_path), "--max", "5", "--baseline", str(bl)]) == 2
+    assert "baseline" in capsys.readouterr().err.lower()
+
+
+def test_baseline_key_falls_back_to_absolute_when_file_outside_baseline_dir(tmp_path):
+    # Scanned file lives outside the baseline's directory, so it can't be made
+    # relative to it; the key falls back to the absolute (posix) path.
+    src = tmp_path / "src"
+    src.mkdir()
+    _write(src, "m.py", NESTED)
+    other = tmp_path / "other"
+    other.mkdir()
+    bl = other / "baseline.json"
+    assert main([str(src), "--max", "5", "--baseline", str(bl)]) == 0
+    key = next(iter(json.loads(bl.read_text())))
+    assert key.startswith("/") and key.endswith("m.py::f")
+
+
 def test_main_lists_all_functions_worst_first(tmp_path, capsys):
     # Plain listing mode (no --max): every function is printed, worst first.
     _write(tmp_path, "m.py", NESTED + FLAT)

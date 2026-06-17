@@ -7,6 +7,17 @@ All notable changes to cococo are documented here. The format is based on
 a score — even a bug fix — is a major release, because it can flip a downstream
 `--max` gate red or green.
 
+## [3.4.1] - 2026-06-17
+
+### Fixed
+
+- Restored the 100% test-coverage gate, which the 3.4.0 refactor-suggestion work
+  had dropped to 98%: added tests covering attribute-mutation counting,
+  mixed-subject and constant-on-left equality chains, and `match` guard/OR
+  patterns in the suggestion heuristics, plus baseline write-failure and
+  outside-root key fallback in the CLI. Removed an unreachable defensive branch
+  in the coupling analysis. No behavior change.
+
 ## [3.4.0] - 2026-06-17
 
 ### Added
