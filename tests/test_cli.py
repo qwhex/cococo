@@ -294,6 +294,14 @@ def f(x, items):
 """
 
 
+def _suggestion_kinds_from_cli(tmp_path, capsys, src):
+    path = _write(tmp_path, "m.py", src)
+    assert main([str(path), "--json", "--min", "0"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    [func] = report["functions"]
+    return {suggestion["kind"] for suggestion in func["suggestions"]}
+
+
 def test_gate_failure_prints_actionable_suggestions(tmp_path, capsys):
     _write(tmp_path, "m.py", NESTED)
     assert main([str(tmp_path), "--max", "5"]) == 1
@@ -339,6 +347,134 @@ def test_json_report_includes_scan_coverage(tmp_path, capsys):
     assert len(report["skipped"]) == 1
     assert report["skipped"][0]["path"].endswith("bad.py")
     assert "SyntaxError" in report["skipped"][0]["reason"]
+
+
+def test_cli_does_not_suggest_predicate_for_walrus_condition(tmp_path, capsys):
+    kinds = _suggestion_kinds_from_cli(
+        tmp_path,
+        capsys,
+        """
+def f(pattern, text):
+    if (m := pattern.match(text)) and (m.group(1) or m.group(2)):
+        return m.group(1)
+    return None
+""",
+    )
+
+    assert "extract_predicate" not in kinds
+
+
+def test_cli_does_not_suggest_dispatcher_for_ordered_predicates(tmp_path, capsys):
+    kinds = _suggestion_kinds_from_cli(
+        tmp_path,
+        capsys,
+        """
+def classify(x):
+    if x < 0:
+        return "negative"
+    elif x == 0:
+        return "zero"
+    elif x < 10:
+        return "small"
+    elif x < 100:
+        return "medium"
+    else:
+        return "large"
+""",
+    )
+
+    assert "split_dispatcher" not in kinds
+
+
+def test_cli_does_not_suggest_dispatcher_for_side_effect_conditions(tmp_path, capsys):
+    kinds = _suggestion_kinds_from_cli(
+        tmp_path,
+        capsys,
+        """
+def route(req):
+    if req.consume("admin"):
+        return admin(req)
+    elif req.consume("user"):
+        return user(req)
+    elif req.consume("guest"):
+        return guest(req)
+    elif req.consume("anon"):
+        return anon(req)
+    return reject(req)
+""",
+    )
+
+    assert "split_dispatcher" not in kinds
+
+
+def test_cli_does_not_suggest_extract_helper_for_loop_control_flow(tmp_path, capsys):
+    kinds = _suggestion_kinds_from_cli(
+        tmp_path,
+        capsys,
+        """
+def scan(rows, verbose, debug):
+    if verbose and debug:
+        log("scan")
+    found = []
+    for row in rows:
+        if row.skip:
+            continue
+        if row.stop:
+            break
+        for cell in row.cells:
+            if cell.ok:
+                found.append(cell)
+    return found
+""",
+    )
+
+    assert "extract_helper" not in kinds
+
+
+def test_cli_does_not_suggest_extract_helper_for_generator_region(tmp_path, capsys):
+    kinds = _suggestion_kinds_from_cli(
+        tmp_path,
+        capsys,
+        """
+def stream(rows, verbose, debug):
+    if verbose and debug:
+        log("stream")
+    for row in rows:
+        if row.enabled:
+            for item in row.items:
+                if item.ready:
+                    yield item
+    return
+""",
+    )
+
+    assert "extract_helper" not in kinds
+
+
+def test_cli_does_not_suggest_extract_helper_for_many_mutated_state_fields(tmp_path, capsys):
+    kinds = _suggestion_kinds_from_cli(
+        tmp_path,
+        capsys,
+        """
+def compute(state, flag):
+    if flag and state.ready:
+        log(state)
+    if flag:
+        state.a += 1
+        state.b += state.a
+        state.c += state.b
+        state.d += state.c
+        state.e += state.d
+        for i in range(state.e):
+            if i % 2:
+                state.c += i
+            if state.c > 100:
+                return state
+    return state
+""",
+    )
+
+    assert "extract_helper" not in kinds
 
 
 def test_fix_rewrites_file_and_lowers_score(tmp_path, capsys):

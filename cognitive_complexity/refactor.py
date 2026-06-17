@@ -21,6 +21,7 @@ _MIN_REDUCTION = 2  # ignore suggestions that barely move the score
 _MAX_SUGGESTIONS = 3  # keep the report focused on the biggest wins
 _EXTRACT_MIN_POINTS = 6  # a block heavy enough to pull into its own helper
 _EXTRACT_MIN_LINES = 5
+_MAX_COUPLING = 4  # max number of variables crossing the boundary before extraction is harmful
 _DISPATCH_MIN_ARMS = 3  # elif arms before "split into a dispatch table"
 _DISPATCH_MIN_CASES = 4  # match cases, ditto
 _PREDICATE_MIN_POINTS = 2  # a boolean expression worth naming
@@ -91,9 +92,9 @@ def suggest_refactors(funcdef: AnyFuncdef, breakdown: list[Contribution]) -> lis
     total = sum(c.points for c in breakdown)
     candidates: list[Suggestion] = []
     candidates += _guard_suggestions(funcdef, breakdown, total)
-    candidates += _predicate_suggestions(breakdown, total)
+    candidates += _predicate_suggestions(funcdef, breakdown, total)
     for region in _iter_regions(funcdef):
-        candidates += _region_suggestions(region, breakdown, total)
+        candidates += _region_suggestions(funcdef, region, breakdown, total)
     return _select(candidates)
 
 
@@ -150,7 +151,7 @@ def _guard_suggestions(
 
 
 def _region_suggestions(
-    region: ast.stmt, breakdown: list[Contribution], total: int
+    funcdef: AnyFuncdef, region: ast.stmt, breakdown: list[Contribution], total: int
 ) -> list[Suggestion]:
     start = region.lineno
     end = region.end_lineno or start
@@ -159,7 +160,12 @@ def _region_suggestions(
     # ``points < total`` keeps us from advising "extract the whole function" when
     # one region spans the entire body; that region carries every point.
     big_enough = points >= _EXTRACT_MIN_POINTS and (end - start + 1) >= _EXTRACT_MIN_LINES
-    if big_enough and points < total:
+    if (
+        big_enough
+        and points < total
+        and _is_extractable_region(region)
+        and _analyze_coupling(funcdef, region) <= _MAX_COUPLING
+    ):
         out.append(_make("extract_helper", start, end, points, total))
     dispatch = _dispatch_reduction(region)
     if dispatch:
@@ -167,14 +173,158 @@ def _region_suggestions(
     return out
 
 
+def _is_extractable_region(region: ast.stmt) -> bool:
+    """Whether a region is a reasonable candidate for a plain helper extraction."""
+    if any(
+        isinstance(node, (ast.Break, ast.Continue, ast.Return, ast.Yield, ast.YieldFrom))
+        for node in ast.walk(region)
+    ):
+        return False
+    return _attribute_mutation_count(region) <= _MAX_COUPLING
+
+
+def _attribute_mutation_count(region: ast.stmt) -> int:
+    attrs: set[str] = set()
+    for node in ast.walk(region):
+        target: ast.AST | None = None
+        if isinstance(node, ast.AugAssign | ast.NamedExpr):
+            target = node.target
+        elif isinstance(node, ast.Assign | ast.AnnAssign):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for item in targets:
+                attrs.update(_stored_attribute_keys(item))
+            continue
+        if target is not None:
+            attrs.update(_stored_attribute_keys(target))
+    return len(attrs)
+
+
+def _stored_attribute_keys(node: ast.AST) -> set[str]:
+    if isinstance(node, ast.Attribute):
+        return {ast.unparse(node)}
+    if isinstance(node, ast.Tuple | ast.List):
+        return {key for item in node.elts for key in _stored_attribute_keys(item)}
+    return set()
+
+
+def _analyze_coupling(funcdef: AnyFuncdef, region: ast.stmt) -> int:
+    defined_before = {node.arg for node in ast.walk(funcdef.args) if isinstance(node, ast.arg)}
+    used_after = set()
+    region_loads = set()
+    region_stores = set()
+
+    start = region.lineno
+    end = region.end_lineno or start
+
+    for node in ast.walk(funcdef):
+        if isinstance(node, ast.Name):
+            lineno = getattr(node, "lineno", 0)
+            if lineno == 0:
+                continue
+
+            if lineno < start:
+                if isinstance(node.ctx, ast.Store):
+                    defined_before.add(node.id)
+            elif lineno > end:
+                if isinstance(node.ctx, ast.Load):
+                    used_after.add(node.id)
+            else:
+                if isinstance(node.ctx, ast.Load):
+                    region_loads.add(node.id)
+                elif isinstance(node.ctx, ast.Store):
+                    region_stores.add(node.id)
+
+    inputs = region_loads & defined_before
+    outputs = region_stores & used_after
+    return len(inputs) + len(outputs)
+
+
 def _dispatch_reduction(region: ast.stmt) -> int:
     if isinstance(region, ast.If):
-        arms = _elif_arms(region)
+        arms = _elif_arms(region) if _is_simple_equality_chain(region) else 0
         return arms if arms >= _DISPATCH_MIN_ARMS else 0
     if isinstance(region, ast.Match):
+        if _has_structural_patterns(region):
+            return 0
         cases = len(region.cases)
         return cases - 1 if cases >= _DISPATCH_MIN_CASES else 0
     return 0
+
+
+def _is_simple_equality_chain(node: ast.If) -> bool:
+    tests = _if_chain_tests(node)
+    subject: str | None = None
+    for test in tests:
+        parsed = _simple_equality_test(test)
+        if parsed is None:
+            return False
+        current_subject, _key = parsed
+        if subject is None:
+            subject = current_subject
+        elif current_subject != subject:
+            return False
+    return subject is not None
+
+
+def _if_chain_tests(node: ast.If) -> list[ast.expr]:
+    tests = [node.test]
+    current = node
+    while len(current.orelse) == 1 and isinstance(current.orelse[0], ast.If):
+        current = current.orelse[0]
+        tests.append(current.test)
+    return tests
+
+
+def _simple_equality_test(test: ast.expr) -> tuple[str, object] | None:
+    if not (
+        isinstance(test, ast.Compare)
+        and len(test.ops) == 1
+        and isinstance(test.ops[0], ast.Eq)
+        and len(test.comparators) == 1
+    ):
+        return None
+    left = _dispatch_subject(test.left)
+    right = _dispatch_subject(test.comparators[0])
+    left_key = _dispatch_key(test.left)
+    right_key = _dispatch_key(test.comparators[0])
+    if left is not None and right_key is not None:
+        return left, right_key
+    if right is not None and left_key is not None:
+        return right, left_key
+    return None
+
+
+def _dispatch_subject(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name | ast.Attribute | ast.Subscript):
+        return ast.unparse(node)
+    return None
+
+
+def _dispatch_key(node: ast.AST) -> object | None:
+    if isinstance(node, ast.Constant) and isinstance(
+        node.value, (str, int, float, bool, bytes, type(None))
+    ):
+        return node.value
+    return None
+
+
+def _has_structural_patterns(node: ast.Match) -> bool:
+    for case in node.cases:
+        if case.guard is not None:
+            return True
+        if not _is_simple_pattern(case.pattern):
+            return True
+    return False
+
+
+def _is_simple_pattern(pattern: ast.pattern) -> bool:
+    if isinstance(pattern, (ast.MatchValue, ast.MatchSingleton)):
+        return True
+    if isinstance(pattern, ast.MatchAs) and pattern.pattern is None:
+        return True
+    if isinstance(pattern, ast.MatchOr):
+        return all(_is_simple_pattern(p) for p in pattern.patterns)
+    return False
 
 
 def _elif_arms(node: ast.If) -> int:
@@ -186,12 +336,26 @@ def _elif_arms(node: ast.If) -> int:
     return arms
 
 
-def _predicate_suggestions(breakdown: list[Contribution], total: int) -> list[Suggestion]:
+def _predicate_suggestions(
+    funcdef: AnyFuncdef, breakdown: list[Contribution], total: int
+) -> list[Suggestion]:
+    unsafe_lines = _predicate_unsafe_lines(funcdef)
     return [
         _make("extract_predicate", c.lineno, c.lineno, c.points, total)
         for c in breakdown
-        if c.label == "bool-op" and c.points >= _PREDICATE_MIN_POINTS
+        if c.label == "bool-op"
+        and c.points >= _PREDICATE_MIN_POINTS
+        and c.lineno not in unsafe_lines
     ]
+
+
+def _predicate_unsafe_lines(funcdef: AnyFuncdef) -> set[int]:
+    return {
+        node.lineno
+        for node in ast.walk(funcdef)
+        if isinstance(node, ast.BoolOp)
+        and any(isinstance(child, ast.NamedExpr) for child in ast.walk(node))
+    }
 
 
 def _select(candidates: list[Suggestion]) -> list[Suggestion]:
