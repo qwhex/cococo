@@ -115,3 +115,6 @@ venv.bak/
 # pyproject.toml, but cococo is a setup.py library with no [project] deps to
 # lock — so the file is a transient artifact, not a real lockfile.
 uv.lock
+
+# Local agent guide (CLAUDE.md) — kept out of the repo intentionally.
+CLAUDE.md
