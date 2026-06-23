@@ -7,6 +7,24 @@ All notable changes to cococo are documented here. The format is based on
 a score — even a bug fix — is a major release, because it can flip a downstream
 `--max` gate red or green.
 
+## [3.6.0] - 2026-06-23
+
+### Added
+
+- Refactor suggestions now appear **by default** in the plain listing, inline on
+  stdout under each function — so the actionable advice is the primary output, not
+  a gate-only diagnostic. New `--suggest-min N` flag attaches suggestions only to
+  functions scoring at least `N` (defaults to `--min`), applied to both the text
+  listing and the `--json` report. Listing mode stays quiet when no refactor
+  applies (the "no mechanical refactor found" line remains gate-only). Output
+  only; no complexity score is affected. (`856a64a`)
+
+### Changed
+
+- `just release` gained a dry-run mode (`just release dry`) that runs the guards
+  and prints the commit/tag/push plan without committing, tagging, or pushing.
+  (`fb6a054`)
+
 ## [3.5.1] - 2026-06-23
 
 ### Added
