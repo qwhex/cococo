@@ -3,4 +3,4 @@ entry = "big_sales"
 expected_min_reduction = 1
 detect = false
 source = "catalog EX-A2-2"
-notes = "sequential if-filter syntax scores as comprehension-if (+2), not bool-op; engine stays silent but collapsing into a named predicate reduces score by 1"
+notes = "delta is only 1 point (below MIN_REDUCTION=2, the deliberate noise floor) — surfacing it needs a scoring change (see docs/proposed-scoring-changes.md), not a detector. Kept as reduction-only data."
