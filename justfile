@@ -76,12 +76,15 @@ check-dist: build
 # uncommitted. Verifies the version in __init__.py has a matching CHANGELOG.md
 # section, commits those two files as `release X.Y.Z`, then tags and pushes —
 # pushing the tag triggers the publish workflow (.github/workflows/release.yml).
-release:
+# Pass any argument for a dry run that runs the guards and prints the plan
+# without running `just check`, committing, tagging, or pushing — `just release dry`.
+release dry="":
     #!/usr/bin/env bash
     set -euo pipefail
     # Use the project venv without requiring manual activation (CI has no .venv
     # and gets `python` from setup-python, so this is a no-op there).
     [ -x .venv/bin/python ] && export PATH="$PWD/.venv/bin:$PATH"
+    dry="{{dry}}"
     branch=$(git rev-parse --abbrev-ref HEAD)
     [ "$branch" = "master" ] || { echo "release must be cut from master (on $branch)"; exit 1; }
     # Only the version + changelog may be uncommitted; everything else must be in.
@@ -91,13 +94,23 @@ release:
     version=$(python -c "import cognitive_complexity as c; print(c.__version__)")
     grep -qF "## [$version]" CHANGELOG.md || { echo "no '## [$version]' section in CHANGELOG.md"; exit 1; }
     git rev-parse "v$version" >/dev/null 2>&1 && { echo "tag v$version already exists"; exit 1; } || true
+    notes=$(awk "/^## \[$version\]/{f=1;next} /^## \[/{f=0} f" CHANGELOG.md)
+    if [ -n "$dry" ]; then
+        echo "[dry-run] release $version — guards passed. Would then:"
+        echo "[dry-run]   just check"
+        echo "[dry-run]   git commit cognitive_complexity/__init__.py CHANGELOG.md -m 'release $version'"
+        echo "[dry-run]   git tag -a v$version  (notes below)"
+        echo "[dry-run]   git push origin master v$version"
+        echo "[dry-run] --- tag notes ---"
+        echo "$notes"
+        exit 0
+    fi
     just check
     git add cognitive_complexity/__init__.py CHANGELOG.md
     git diff --cached --quiet || git commit -m "release $version"
-    notes=$(awk "/^## \[$version\]/{f=1;next} /^## \[/{f=0} f" CHANGELOG.md)
     git tag -a "v$version" -m "$notes"
     git push origin master "v$version"
-    @echo "Pushed v$version — the release workflow will publish to PyPI."
+    echo "Pushed v$version — the release workflow will publish to PyPI."
 
 # Manual publish fallback (CI publishes via trusted publishing; use only if needed).
 publish: check-dist
