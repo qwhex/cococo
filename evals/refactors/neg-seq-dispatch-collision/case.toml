@@ -1,0 +1,6 @@
+kind = "split_dispatcher"
+entry = "classify"
+negative = true
+forbidden_kind = "split_dispatcher"
+source = "brainstorm EX-N5 / council key-collision finding"
+notes = "1, True, 1.0 collapse to one dict key, so a dispatch table would silently merge arms — must NOT fire"

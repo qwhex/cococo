@@ -1,6 +1,6 @@
 kind = "split_dispatcher"
 entry = "get_storage_backend"
 expected_min_reduction = 4
-detect = false
+detect = true
 source = "catalog EX-A1-10"
-notes = "sequential if ladder; factory-function pattern preserves lazy env-var reads; C1 not yet detected"
+notes = "sequential if ladder; factory-function pattern preserves lazy env-var reads; detected by sequential_dispatch"

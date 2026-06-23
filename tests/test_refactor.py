@@ -86,6 +86,83 @@ def test_long_elif_chain_suggests_dispatcher():
     assert dispatch.estimated_reduction >= 3
 
 
+def test_sequential_if_chain_suggests_dispatcher():
+    suggestions = _suggest("""
+    def f(x):
+        if x == "a":
+            return 1
+        if x == "b":
+            return 2
+        if x == "c":
+            return 3
+        return 0
+    """)
+    dispatch = next(s for s in suggestions if s.kind == "split_dispatcher")
+    assert dispatch.estimated_reduction == 2  # 3 arms -> reduction == len - 1
+
+
+def test_short_sequential_if_chain_does_not_suggest_dispatcher():
+    assert "split_dispatcher" not in _kinds(
+        _suggest("""
+    def f(x):
+        if x == "a":
+            return 1
+        if x == "b":
+            return 2
+        return 0
+    """)
+    )
+
+
+def test_sequential_dispatch_skips_colliding_keys():
+    # 1, True, 1.0 collapse to one dict key — a table would silently merge arms.
+    assert "split_dispatcher" not in _kinds(
+        _suggest("""
+    def f(x):
+        if x == 1:
+            return "a"
+        if x == True:
+            return "b"
+        if x == 1.0:
+            return "c"
+        return "z"
+    """)
+    )
+
+
+def test_sequential_dispatch_skips_non_terminal_arm():
+    # An arm that assigns and falls through is not terminal — moving it to a dict
+    # would drop the later log() side effect.
+    assert "split_dispatcher" not in _kinds(
+        _suggest("""
+    def f(x):
+        if x == "a":
+            y = 1
+        if x == "b":
+            y = 2
+        if x == "c":
+            y = 3
+        return y
+    """)
+    )
+
+
+def test_sequential_dispatch_skips_side_effecting_subject():
+    # decode(x) is a Call — collapsing would change the number of calls.
+    assert "split_dispatcher" not in _kinds(
+        _suggest("""
+    def f(x):
+        if decode(x) == "a":
+            return 1
+        if decode(x) == "b":
+            return 2
+        if decode(x) == "c":
+            return 3
+        return 0
+    """)
+    )
+
+
 def test_short_elif_chain_does_not_suggest_dispatcher():
     assert "split_dispatcher" not in _kinds(
         _suggest("""

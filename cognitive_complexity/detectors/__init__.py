@@ -15,6 +15,7 @@ from cognitive_complexity.detectors import (
     flatten_else_after_return,
     guard_clause,
     merge_nested_if,
+    sequential_dispatch,
     split_dispatcher,
 )
 from cognitive_complexity.detectors.base import (
@@ -34,6 +35,7 @@ REGISTRY: list[Detector] = [
     extract_predicate.detect,
     merge_nested_if.detect,
     flatten_else_after_return.detect,
+    sequential_dispatch.detect,
 ]
 
 __all__ = ["Suggestion", "suggest_refactors"]

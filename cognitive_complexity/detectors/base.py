@@ -249,7 +249,7 @@ def is_simple_equality_chain(node: ast.If) -> bool:
     tests = _if_chain_tests(node)
     subject: str | None = None
     for test in tests:
-        parsed = _simple_equality_test(test)
+        parsed = simple_equality_test(test)
         if parsed is None:
             return False
         current_subject, _key = parsed
@@ -269,7 +269,7 @@ def _if_chain_tests(node: ast.If) -> list[ast.expr]:
     return tests
 
 
-def _simple_equality_test(test: ast.expr) -> tuple[str, object] | None:
+def simple_equality_test(test: ast.expr) -> tuple[str, object] | None:
     if not (
         isinstance(test, ast.Compare)
         and len(test.ops) == 1
