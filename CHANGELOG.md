@@ -7,6 +7,18 @@ All notable changes to cococo are documented here. The format is based on
 a score — even a bug fix — is a major release, because it can flip a downstream
 `--max` gate red or green.
 
+## [3.5.1] - 2026-06-23
+
+### Added
+
+- Published to PyPI as `codecoco` (`pip install codecoco`). The import name
+  (`cognitive_complexity`) and CLI (`cococo`) are unchanged. Releases are now cut
+  with `just release`, which tags `vX.Y.Z` and triggers a GitHub Actions workflow
+  that builds and publishes via PyPI trusted publishing (OIDC) and creates a
+  GitHub Release. Added `just changelog-draft`/`build`/`check-dist`/`publish`
+  recipes and `build`/`twine` dev dependencies. No library behavior change; no
+  complexity score is affected.
+
 ## [3.5.0] - 2026-06-23
 
 ### Fixed
