@@ -1,0 +1,14 @@
+kind = "extract_helper"
+entry = "count_matches"
+negative = true
+forbidden_kind = "extract_helper"
+known_gap = true
+source = "brainstorm EX-A3-12"
+notes = """\
+`found` is read AND written across the region via `found += ...`, so extracting it \
+would need a return-and-reassign — high coupling. The engine WRONGLY suggests \
+extract_helper today because `_analyze_coupling` does not count an AugAssign target \
+as both a read and a write. Fix: in refactor._name_coupling_role, treat an \
+ast.AugAssign target Name as both region_loads and region_stores (and \
+defined_before/used_after by position). Flip known_gap off once fixed.\
+"""

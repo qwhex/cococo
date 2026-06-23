@@ -27,6 +27,11 @@ typecheck:
 test:
     python -m pytest --cov=cognitive_complexity --cov-report=xml --cov-fail-under=100
 
+# Run the refactor-suggestion eval set with the per-axis table (the gate runs it
+# via the pytest test in `test`; this recipe is the human-readable view).
+eval:
+    python -m evals.refactor_eval
+
 # Lint the README (mdl, a Ruby gem). Required in CI; optional locally.
 check-readme:
     #!/usr/bin/env bash

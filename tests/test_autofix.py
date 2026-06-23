@@ -12,23 +12,8 @@ def _score(src: str) -> int:
     return get_cognitive_complexity(ast.parse(src.strip()).body[0])
 
 
-def test_flattens_trailing_if_in_function_body():
-    before = textwrap.dedent("""
-        def f(x, items):
-            setup()
-            if x:
-                for item in items:
-                    if item.ok:
-                        handle(item)
-        """).strip()
-    after, count = fix_source(before)
-    assert count == 1
-    assert "if not x:" in after
-    assert "    return\n" in after
-    # The body moved up one level and the score dropped.
-    assert _score(after) < _score(before)
-    # Result is valid Python.
-    ast.parse(after)
+# NOTE: the "flatten a trailing if in a function body" case moved to the eval set
+# (evals/refactors/autofix-guard-trailing-if/), graded by its autofix axis.
 
 
 def test_flattens_trailing_if_in_loop_body_with_continue():

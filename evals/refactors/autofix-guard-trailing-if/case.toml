@@ -1,0 +1,7 @@
+kind = "guard_clause"
+entry = "f"
+autofixable = true
+expected_min_reduction = 1
+detect = true
+source = "converted from tests/test_autofix.py::test_flattens_trailing_if_in_function_body"
+notes = "trailing if with a nested for/if body; the `--fix` rewriter flattens it"

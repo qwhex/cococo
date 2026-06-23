@@ -1,0 +1,6 @@
+kind = "extract_helper"
+entry = "report"
+expected_min_reduction = 3
+detect = true
+source = "catalog EX-EH1"
+notes = "the heavy emit-pass region (< total, since the count-pass also scores) is pulled into a helper; not run (external deps) so no behavior axis"

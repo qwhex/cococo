@@ -1,0 +1,6 @@
+kind = "none"
+entry = "add"
+negative = true
+silent = true
+source = "catalog EX-N1"
+notes = "already flat; nothing to suggest"

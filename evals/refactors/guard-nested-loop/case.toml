@@ -1,0 +1,10 @@
+kind = "guard_clause"
+entry = "count"
+# Suggestion fires, but `--fix` won't apply: the if is not the last statement
+# (a `return total` follows), so the autofixer leaves it. Detection-only.
+autofixable = false
+expected_min_reduction = 2
+detect = true
+behavior = ["count(False, [1, 2])", "count(True, [1, -2, 3])", "count(True, [])"]
+source = "catalog EX-G1 (fixed: real nested body, unlike the score-neutral flat variant)"
+notes = "guard reduces score only because it de-indents a nested for/if"

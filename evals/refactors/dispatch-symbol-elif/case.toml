@@ -1,0 +1,7 @@
+kind = "split_dispatcher"
+entry = "symbol"
+expected_min_reduction = 3
+detect = true
+behavior = ["symbol('add')", "symbol('div')", "symbol('zzz')"]
+source = "catalog EX-SD1"
+notes = "elif equality ladder on one subject, terminal returns -> dispatch dict"

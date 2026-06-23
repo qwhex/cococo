@@ -19,6 +19,10 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+# The eval fixtures under evals/refactors/ are deliberately smelly, incomplete
+# code (undefined stub calls, consecutive-if "dispatch" smells, etc.) — they are
+# data, not shipped code, so they must not be linted or formatted.
+extend-exclude = ["evals/refactors"]
 
 [tool.ruff.lint]
 select = [
@@ -55,6 +59,7 @@ max-complexity = 20
 "cognitive_complexity/discovery.py" = ["T201"]  # scanner reports skipped files to stderr by design
 "tests/*.py" = ["T201", "S101"]
 "benchmarks/*.py" = ["T201", "S101", "S603"]  # benchmark shells out to pytest on trusted local paths
+"evals/refactor_eval.py" = ["T201"]  # eval runner prints its result table by design
 
 [tool.mypy]
 # Type checking configuration — strict, mirrored from cosmetix data_pipeline.
