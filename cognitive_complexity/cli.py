@@ -35,8 +35,8 @@ from pathlib import Path
 from cognitive_complexity.api import Contribution, get_cognitive_complexity_breakdown
 from cognitive_complexity.autofix import atomic_write, fix_source
 from cognitive_complexity.common_types import AnyFuncdef, ScoredFunction, SkippedFile
+from cognitive_complexity.detectors import Suggestion, suggest_refactors
 from cognitive_complexity.discovery import find_function, iter_python_files, parse_target, scan
-from cognitive_complexity.refactor import Suggestion, suggest_refactors
 from cognitive_complexity.report import build_report, func_key, is_over, to_json
 
 

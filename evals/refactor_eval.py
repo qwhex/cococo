@@ -37,7 +37,7 @@ from cognitive_complexity.api import (
 )
 from cognitive_complexity.autofix import fix_source
 from cognitive_complexity.common_types import is_funcdef
-from cognitive_complexity.refactor import suggest_refactors
+from cognitive_complexity.detectors import suggest_refactors
 
 REFACTORS_DIR = Path(__file__).parent / "refactors"
 

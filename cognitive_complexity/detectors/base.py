@@ -1,15 +1,21 @@
-"""Heuristic refactor suggestions derived from the complexity breakdown.
+"""Shared toolkit for refactor detectors.
 
-Clean-room: the region model, thresholds, and reduction estimates here are our
-own. Each suggestion reads the same per-construct :class:`Contribution` data the
-scorer emits, so its estimated drop stays consistent with the reported score,
-and names one concrete, mechanical refactor. Designed to be actionable for a
-human or an agent reading a failing ``--max`` gate.
+A *detector* is a pure function ``detect(funcdef, breakdown, total) -> list[Suggestion]``
+that names one kind of mechanical refactor. Each lives in its own module under
+``detectors/`` and is registered once in ``detectors/__init__.py`` — so detectors
+can be written independently (e.g. in parallel) without touching a shared file.
+
+This module is the toolkit they build on: the :class:`Suggestion` shape, the tuned
+thresholds, :func:`make_suggestion`, and the AST helpers (region traversal, coupling
+analysis, dispatch/equality matching) reused across detectors. Estimates stay tied
+to the same :class:`Contribution` data the scorer emits.
 """
 
 from __future__ import annotations
 
 import ast
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import NamedTuple
 
 from cognitive_complexity.api import Contribution
@@ -17,16 +23,16 @@ from cognitive_complexity.common_types import AnyFuncdef, is_funcdef
 
 # Heuristic thresholds (ours, not part of Campbell's metric). Tuned to surface
 # only refactors that meaningfully cut the score; adjust here, in one place.
-_MIN_REDUCTION = 2  # ignore suggestions that barely move the score
-_MAX_SUGGESTIONS = 3  # keep the report focused on the biggest wins
-_EXTRACT_MIN_POINTS = 6  # a block heavy enough to pull into its own helper
-_EXTRACT_MIN_LINES = 5
-_MAX_COUPLING = 4  # max number of variables crossing the boundary before extraction is harmful
-_DISPATCH_MIN_ARMS = 3  # elif arms before "split into a dispatch table"
-_DISPATCH_MIN_CASES = 4  # match cases, ditto
-_PREDICATE_MIN_POINTS = 2  # a boolean expression worth naming
+MIN_REDUCTION = 2  # ignore suggestions that barely move the score
+MAX_SUGGESTIONS = 3  # keep the report focused on the biggest wins
+EXTRACT_MIN_POINTS = 6  # a block heavy enough to pull into its own helper
+EXTRACT_MIN_LINES = 5
+MAX_COUPLING = 4  # max variables crossing the boundary before extraction is harmful
+DISPATCH_MIN_ARMS = 3  # elif arms before "split into a dispatch table"
+DISPATCH_MIN_CASES = 4  # match cases, ditto
+PREDICATE_MIN_POINTS = 2  # a boolean expression worth naming
 
-_REGION_TYPES = (
+REGION_TYPES = (
     ast.If,
     ast.For,
     ast.AsyncFor,
@@ -37,44 +43,14 @@ _REGION_TYPES = (
     ast.Match,
 )
 
-_STEPS: dict[str, tuple[str, ...]] = {
-    "guard_clause": (
-        "Invert the condition and return/continue early when it fails.",
-        "De-indent the main path one level.",
-        "Repeat for any further nested guards.",
-    ),
-    "extract_helper": (
-        "Move this block into a small named helper.",
-        "Pass the values it reads as parameters.",
-        "Return what the caller needs.",
-    ),
-    "split_dispatcher": (
-        "Map each case to a named handler function.",
-        "Replace the chain with a dispatch dict (or a thin delegating match).",
-        "Keep this function a shallow orchestrator.",
-    ),
-    "extract_predicate": (
-        "Move this boolean expression into a well-named predicate function.",
-        "Call the predicate in the condition.",
-        "Keep the control flow here focused on branching.",
-    ),
-}
-
-_TITLES: dict[str, str] = {
-    "guard_clause": "Flatten nested block with a guard clause",
-    "extract_helper": "Extract this block into a helper function",
-    "split_dispatcher": "Replace the branch ladder with a dispatch table",
-    "extract_predicate": "Name this complex condition as a predicate",
-}
-
 
 class Suggestion(NamedTuple):
     """One concrete, mechanical refactor for a too-complex function.
 
     ``estimated_reduction`` is how many points the score should drop if applied;
     ``estimated_complexity_after`` is the function total minus that. ``kind`` is a
-    stable machine id (see :data:`_TITLES`); ``autofixable`` flags the kinds the
-    ``--fix`` rewriter can apply on its own.
+    stable machine id; ``autofixable`` flags the kinds the ``--fix`` rewriter can
+    apply on its own.
     """
 
     kind: str
@@ -87,31 +63,53 @@ class Suggestion(NamedTuple):
     steps: tuple[str, ...]
 
 
-def suggest_refactors(funcdef: AnyFuncdef, breakdown: list[Contribution]) -> list[Suggestion]:
-    """Up to a few high-value refactors for ``funcdef``, biggest reduction first."""
-    total = sum(c.points for c in breakdown)
-    candidates: list[Suggestion] = []
-    candidates += _guard_suggestions(funcdef, breakdown, total)
-    candidates += _predicate_suggestions(funcdef, breakdown, total)
-    for region in _iter_regions(funcdef):
-        candidates += _region_suggestions(funcdef, region, breakdown, total)
-    return _select(candidates)
+@dataclass(frozen=True)
+class DetectorContext:
+    """Everything a detector needs, with shared work precomputed once.
+
+    ``regions`` (the control-flow region list) is walked a single time here rather
+    than re-walked inside every detector — so adding detectors does not multiply
+    the per-function cost. Detectors read this; they never re-derive it.
+    """
+
+    funcdef: AnyFuncdef
+    breakdown: list[Contribution]
+    total: int
+    regions: list[ast.stmt]
 
 
-def _make(kind: str, start: int, end: int, reduction: int, total: int) -> Suggestion:
+# A detector turns the shared context into suggestions.
+Detector = Callable[["DetectorContext"], list[Suggestion]]
+
+
+def make_suggestion(
+    *,
+    kind: str,
+    title: str,
+    steps: tuple[str, ...],
+    autofixable: bool,
+    start: int,
+    end: int,
+    reduction: int,
+    total: int,
+) -> Suggestion:
+    """Build a :class:`Suggestion`; the detector owns its kind/title/steps/autofixable."""
     return Suggestion(
         kind=kind,
-        title=_TITLES[kind],
+        title=title,
         line_start=start,
         line_end=end,
         estimated_reduction=reduction,
         estimated_complexity_after=max(0, total - reduction),
-        autofixable=kind == "guard_clause",
-        steps=_STEPS[kind],
+        autofixable=autofixable,
+        steps=steps,
     )
 
 
-def _iter_regions(node: ast.AST) -> list[ast.stmt]:
+# --- region traversal ----------------------------------------------------------
+
+
+def iter_regions(node: ast.AST) -> list[ast.stmt]:
     """Control-flow regions in the function, not descending into nested defs.
 
     Nested ``def``/``async def`` are independent units, so their inner control
@@ -121,66 +119,27 @@ def _iter_regions(node: ast.AST) -> list[ast.stmt]:
     for child in ast.iter_child_nodes(node):
         if is_funcdef(child):
             continue
-        if isinstance(child, _REGION_TYPES):
+        if isinstance(child, REGION_TYPES):
             regions.append(child)
-        regions.extend(_iter_regions(child))
+        regions.extend(iter_regions(child))
     return regions
 
 
-def _subtree_points(breakdown: list[Contribution], start: int, end: int) -> int:
+def subtree_points(breakdown: list[Contribution], start: int, end: int) -> int:
     return sum(c.points for c in breakdown if start <= c.lineno <= end)
 
 
-def _guard_suggestions(
-    funcdef: AnyFuncdef, breakdown: list[Contribution], total: int
-) -> list[Suggestion]:
-    out: list[Suggestion] = []
-    for node in _iter_regions(funcdef):
-        if not isinstance(node, ast.If) or node.orelse or not node.body:
-            continue
-        body_start = node.body[0].lineno
-        end = node.end_lineno or body_start
-        saved = sum(
-            1
-            for c in breakdown
-            if body_start <= c.lineno <= end and c.nesting_counted and c.lineno != node.lineno
-        )
-        if saved:
-            out.append(_make("guard_clause", node.lineno, end, saved, total))
-    return out
+# --- extraction safety: coupling + mutation ------------------------------------
 
 
-def _region_suggestions(
-    funcdef: AnyFuncdef, region: ast.stmt, breakdown: list[Contribution], total: int
-) -> list[Suggestion]:
-    start = region.lineno
-    end = region.end_lineno or start
-    out: list[Suggestion] = []
-    points = _subtree_points(breakdown, start, end)
-    # ``points < total`` keeps us from advising "extract the whole function" when
-    # one region spans the entire body; that region carries every point.
-    big_enough = points >= _EXTRACT_MIN_POINTS and (end - start + 1) >= _EXTRACT_MIN_LINES
-    if (
-        big_enough
-        and points < total
-        and _is_extractable_region(region)
-        and _analyze_coupling(funcdef, region) <= _MAX_COUPLING
-    ):
-        out.append(_make("extract_helper", start, end, points, total))
-    dispatch = _dispatch_reduction(region)
-    if dispatch:
-        out.append(_make("split_dispatcher", start, end, dispatch, total))
-    return out
-
-
-def _is_extractable_region(region: ast.stmt) -> bool:
+def is_extractable_region(region: ast.stmt) -> bool:
     """Whether a region is a reasonable candidate for a plain helper extraction."""
     if any(
         isinstance(node, (ast.Break, ast.Continue, ast.Return, ast.Yield, ast.YieldFrom))
         for node in ast.walk(region)
     ):
         return False
-    return _attribute_mutation_count(region) <= _MAX_COUPLING
+    return _attribute_mutation_count(region) <= MAX_COUPLING
 
 
 def _attribute_mutation_count(region: ast.stmt) -> int:
@@ -207,7 +166,8 @@ def _stored_attribute_keys(node: ast.AST) -> set[str]:
     return set()
 
 
-def _analyze_coupling(funcdef: AnyFuncdef, region: ast.stmt) -> int:
+def analyze_coupling(funcdef: AnyFuncdef, region: ast.stmt) -> int:
+    """Count variables crossing the region boundary (inputs + outputs)."""
     defined_before = {node.arg for node in ast.walk(funcdef.args) if isinstance(node, ast.arg)}
     used_after: set[str] = set()
     region_loads: set[str] = set()
@@ -269,19 +229,23 @@ def _augmented_load_role(node: ast.AST, start: int, end: int) -> tuple[str, str]
     return None
 
 
-def _dispatch_reduction(region: ast.stmt) -> int:
+# --- dispatch / equality-chain / match matching --------------------------------
+
+
+def dispatch_reduction(region: ast.stmt) -> int:
+    """Points a dispatch-table refactor would remove from ``region`` (0 if N/A)."""
     if isinstance(region, ast.If):
-        arms = _elif_arms(region) if _is_simple_equality_chain(region) else 0
-        return arms if arms >= _DISPATCH_MIN_ARMS else 0
+        arms = elif_arms(region) if is_simple_equality_chain(region) else 0
+        return arms if arms >= DISPATCH_MIN_ARMS else 0
     if isinstance(region, ast.Match):
         if _has_structural_patterns(region):
             return 0
         cases = len(region.cases)
-        return cases - 1 if cases >= _DISPATCH_MIN_CASES else 0
+        return cases - 1 if cases >= DISPATCH_MIN_CASES else 0
     return 0
 
 
-def _is_simple_equality_chain(node: ast.If) -> bool:
+def is_simple_equality_chain(node: ast.If) -> bool:
     tests = _if_chain_tests(node)
     subject: str | None = None
     for test in tests:
@@ -313,10 +277,10 @@ def _simple_equality_test(test: ast.expr) -> tuple[str, object] | None:
         and len(test.comparators) == 1
     ):
         return None
-    left = _dispatch_subject(test.left)
-    right = _dispatch_subject(test.comparators[0])
-    left_key = _dispatch_key(test.left)
-    right_key = _dispatch_key(test.comparators[0])
+    left = dispatch_subject(test.left)
+    right = dispatch_subject(test.comparators[0])
+    left_key = dispatch_key(test.left)
+    right_key = dispatch_key(test.comparators[0])
     if left is not None and right_key is not None:
         return left, right_key
     if right is not None and left_key is not None:
@@ -324,13 +288,13 @@ def _simple_equality_test(test: ast.expr) -> tuple[str, object] | None:
     return None
 
 
-def _dispatch_subject(node: ast.AST) -> str | None:
+def dispatch_subject(node: ast.AST) -> str | None:
     if isinstance(node, ast.Name | ast.Attribute | ast.Subscript):
         return ast.unparse(node)
     return None
 
 
-def _dispatch_key(node: ast.AST) -> object | None:
+def dispatch_key(node: ast.AST) -> object | None:
     if isinstance(node, ast.Constant) and isinstance(
         node.value, (str, int, float, bool, bytes, type(None))
     ):
@@ -357,7 +321,7 @@ def _is_simple_pattern(pattern: ast.pattern) -> bool:
     return False
 
 
-def _elif_arms(node: ast.If) -> int:
+def elif_arms(node: ast.If) -> int:
     arms = 0
     current = node
     while len(current.orelse) == 1 and isinstance(current.orelse[0], ast.If):
@@ -366,44 +330,11 @@ def _elif_arms(node: ast.If) -> int:
     return arms
 
 
-def _predicate_suggestions(
-    funcdef: AnyFuncdef, breakdown: list[Contribution], total: int
-) -> list[Suggestion]:
-    unsafe_lines = _predicate_unsafe_lines(funcdef)
-    return [
-        _make("extract_predicate", c.lineno, c.lineno, c.points, total)
-        for c in breakdown
-        if c.label == "bool-op"
-        and c.points >= _PREDICATE_MIN_POINTS
-        and c.lineno not in unsafe_lines
-    ]
-
-
-def _predicate_unsafe_lines(funcdef: AnyFuncdef) -> set[int]:
+def predicate_unsafe_lines(funcdef: AnyFuncdef) -> set[int]:
+    """Lines whose boolean expression can't be safely lifted (contains ``:=``)."""
     return {
         node.lineno
         for node in ast.walk(funcdef)
         if isinstance(node, ast.BoolOp)
         and any(isinstance(child, ast.NamedExpr) for child in ast.walk(node))
     }
-
-
-def _select(candidates: list[Suggestion]) -> list[Suggestion]:
-    good = [c for c in candidates if c.estimated_reduction >= _MIN_REDUCTION]
-    good.sort(key=lambda c: (-c.estimated_reduction, c.line_start))
-    out: list[Suggestion] = []
-    for candidate in good:
-        if any(_contains(s, candidate) for s in out):
-            continue
-        out.append(candidate)
-        if len(out) == _MAX_SUGGESTIONS:
-            break
-    return out
-
-
-def _contains(outer: Suggestion, inner: Suggestion) -> bool:
-    return (
-        outer.kind == inner.kind
-        and outer.line_start <= inner.line_start
-        and outer.line_end >= inner.line_end
-    )

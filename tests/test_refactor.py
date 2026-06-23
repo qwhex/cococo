@@ -1,7 +1,7 @@
 import ast
 
 from cognitive_complexity.api import get_cognitive_complexity_breakdown
-from cognitive_complexity.refactor import suggest_refactors
+from cognitive_complexity.detectors import suggest_refactors
 
 
 def _suggest(src: str):

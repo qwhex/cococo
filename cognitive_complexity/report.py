@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 from cognitive_complexity.common_types import ScoredFunction, SkippedFile
-from cognitive_complexity.refactor import suggest_refactors
+from cognitive_complexity.detectors import suggest_refactors
 
 
 def _path_key(path: Path, root: Path | None) -> str:
