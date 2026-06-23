@@ -1,15 +1,14 @@
-# `just check` is the single gate: CI runs it (see .github/workflows/ci.yml)
-# and the pre-push hook runs it locally (see `just install-hooks`).
+# The single gate, run by CI (.github/workflows/ci.yml) and the pre-push hook (`just install-hooks`).
 check: format-check lint typecheck complexity test check-readme
 
 # Lint with ruff (ruleset mirrors the parent cosmetix data_pipeline)
 lint:
     ruff check .
 
-# Gate our own cognitive complexity with cococo (dogfooding). Ratcheted to the
-# current ceiling so no function is allowed to get harder to read than today's
-# worst; tighten it (or refactor) rather than loosen it.
+# Gate our own complexity with cococo (dogfooding), ratcheted to the current ceiling.
 complexity:
+    # Tighten --max (or refactor) rather than loosen it: no function should get
+    # harder to read than today's worst.
     python -m cognitive_complexity.cli cognitive_complexity --max 10
 
 # Reformat with ruff
@@ -28,13 +27,12 @@ typecheck:
 test:
     python -m pytest --cov=cognitive_complexity --cov-report=xml --cov-fail-under=100
 
-# Lint the README. mdl is a Ruby gem; CI installs it (Ruby 3.3) and enforces it.
-# Locally it's optional — if it isn't installed, warn and skip rather than hard-
-# fail the gate (and `just release`) on a missing external linter. When mdl IS
-# present its exit code propagates, so real lint failures still fail the recipe.
+# Lint the README (mdl, a Ruby gem). Required in CI; optional locally.
 check-readme:
     #!/usr/bin/env bash
     set -euo pipefail
+    # Skip with a warning if mdl isn't installed locally rather than hard-fail the
+    # gate; CI installs it and enforces it. When present, its exit code propagates.
     if command -v mdl >/dev/null 2>&1; then
         mdl README.md
     else
@@ -52,10 +50,7 @@ bench *args:
 
 # --- Release (see RELEASING.md) -------------------------------------------------
 
-# Draft changelog bullets + a suggested semver bump for the range since the last
-# tag (or `just changelog-draft <base-ref>` for the first release, which has no
-# tag). The suggested bump is advisory: upgrade to a major yourself if the change
-# moves any complexity score (the score is cococo's public contract).
+# Draft changelog bullets + a suggested bump since the last tag (pass a base ref for the first release).
 changelog-draft base="":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -72,17 +67,11 @@ build:
 check-dist: build
     twine check dist/*
 
-# Cut a release: must be on master with only the version bump + changelog entry
-# uncommitted. Verifies the version in __init__.py has a matching CHANGELOG.md
-# section, commits those two files as `release X.Y.Z`, then tags and pushes —
-# pushing the tag triggers the publish workflow (.github/workflows/release.yml).
-# Pass any argument for a dry run that runs the guards and prints the plan
-# without running `just check`, committing, tagging, or pushing — `just release dry`.
+# Cut a release (see RELEASING.md): commit the bump, tag vX.Y.Z, push (triggers publish). `just release dry` to preview.
 release dry="":
     #!/usr/bin/env bash
     set -euo pipefail
-    # Use the project venv without requiring manual activation (CI has no .venv
-    # and gets `python` from setup-python, so this is a no-op there).
+    # Use the project venv without manual activation (no-op in CI, which has no .venv).
     [ -x .venv/bin/python ] && export PATH="$PWD/.venv/bin:$PATH"
     dry="{{dry}}"
     branch=$(git rev-parse --abbrev-ref HEAD)

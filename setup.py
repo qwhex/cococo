@@ -15,11 +15,9 @@ def get_long_description() -> str:
 
 
 setup(
-    # PyPI distribution name. The importable package stays `cognitive_complexity`
-    # (the parent data_pipeline imports it by that name) and the CLI is `cococo`;
-    # both `cognitive_complexity` and `cococo` are already taken on PyPI, so the
-    # distribution is published as `codecoco`. The three names differing is
-    # intentional and documented in the README.
+    # Import package stays `cognitive_complexity` and the CLI is `cococo`; both
+    # names were already taken on PyPI, so the distribution ships as `codecoco`
+    # (the three differ by design — see README).
     name="codecoco",
     description="Library and CLI to compute the cognitive complexity of Python functions",
     classifiers=[
