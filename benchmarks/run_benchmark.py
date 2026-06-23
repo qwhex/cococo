@@ -5,7 +5,7 @@ Times ``get_cognitive_complexity`` in-process over synthetic functions — this
 isolates the algorithm (no pytest/interpreter startup noise) and is the
 sensitive guard against per-node overhead and super-linear blow-ups.
 
-Two modes:
+Three modes:
 
 * ``compute`` (default) -- repeatedly score one large function and report the
   wall-clock distribution (mean/median/stdev/p95) plus per-call time.
@@ -14,11 +14,19 @@ Two modes:
   node*. If the algorithm is linear that figure stays flat as the function
   grows; a rising per-node time signals an accidental O(n^2).
 
+* ``suggest`` -- the regression guard for the *suggestion engine*. Over the eval
+  corpus (``evals/refactors/*/bad.py``), it times ``suggest_refactors`` against
+  the breakdown we already compute, and reports the **overhead ratio** (suggest
+  time / scoring time) plus a per-kind breakdown. As detectors accumulate, that
+  one ratio is what climbs -- watch it, not micro-benchmarks of each detector.
+  ``--no-suggest`` removes this cost entirely, which this mode quantifies.
+
 Run from the repo root so the package is importable::
 
     python -m benchmarks.run_benchmark                       # compute, default size
     python -m benchmarks.run_benchmark --depth 20 --breadth 400
     python -m benchmarks.run_benchmark --mode sweep
+    python -m benchmarks.run_benchmark --mode suggest
 """
 
 from __future__ import annotations
@@ -27,8 +35,14 @@ import argparse
 import ast
 import statistics
 import time
+from collections import defaultdict
 
-from cognitive_complexity.api import get_cognitive_complexity
+from cognitive_complexity.api import (
+    get_cognitive_complexity,
+    get_cognitive_complexity_breakdown,
+)
+from cognitive_complexity.common_types import is_funcdef
+from cognitive_complexity.refactor import suggest_refactors
 
 
 def _build_large_function(depth: int, breadth: int) -> ast.AST:
@@ -115,12 +129,95 @@ def run_sweep(sizes: list[int], depth: int, repeats: int, runs: int, warmup: int
     )
 
 
+def _load_corpus() -> list[tuple[str, str, ast.AST]]:
+    """The eval ``bad.py`` entry functions + their kind, as the benchmark workload.
+
+    Reads ``evals/refactors/*/case.toml`` (kind + entry) and the matching
+    ``bad.py``. These are the worst-case complex functions where detectors work
+    hardest, and the corpus grows for free as eval cases are added.
+    """
+    from evals.refactor_eval import load_cases
+
+    corpus: list[tuple[str, str, ast.AST]] = []
+    for case in load_cases():
+        funcs = {
+            n.name: n
+            for n in ast.walk(ast.parse((case.dir / "bad.py").read_text(encoding="utf-8")))
+            if is_funcdef(n)
+        }
+        funcdef = funcs.get(case.entry)
+        if funcdef is not None:
+            corpus.append((case.id, case.kind, funcdef))
+    return corpus
+
+
+def _per_call(work: object, repeats: int, runs: int, warmup: int) -> float:
+    """Median per-call seconds for ``work`` (a no-arg callable), after warmup."""
+
+    def once() -> float:
+        start = time.perf_counter()
+        for _ in range(repeats):
+            work()  # type: ignore[operator]
+        return (time.perf_counter() - start) / repeats
+
+    for _ in range(warmup):
+        once()
+    return statistics.median(once() for _ in range(runs))
+
+
+def run_suggest(repeats: int, runs: int, warmup: int) -> None:
+    """Time the suggestion engine over the eval corpus; report the overhead ratio."""
+    corpus = _load_corpus()
+    if not corpus:
+        print("no eval corpus found under evals/refactors/ — nothing to benchmark")
+        return
+
+    score_s: list[float] = []
+    suggest_s: list[float] = []
+    by_kind: dict[str, list[float]] = defaultdict(list)
+    for _case_id, kind, funcdef in corpus:
+        breakdown = get_cognitive_complexity_breakdown(funcdef)
+        score_s.append(
+            _per_call(
+                lambda f=funcdef: get_cognitive_complexity_breakdown(f), repeats, runs, warmup
+            )
+        )
+        s = _per_call(lambda f=funcdef, b=breakdown: suggest_refactors(f, b), repeats, runs, warmup)
+        suggest_s.append(s)
+        by_kind[kind].append(s)
+
+    score_med = statistics.median(score_s)
+    suggest_med = statistics.median(suggest_s)
+    print(
+        f"\nSuggestion overhead over {len(corpus)} eval functions "
+        f"({repeats} calls/run, median of {runs}):"
+    )
+    print(
+        f"  scoring (breakdown)  per fn: median {score_med * 1e6:8.2f}us  "
+        f"p95 {percentile(score_s, 95) * 1e6:8.2f}us"
+    )
+    print(
+        f"  suggestions          per fn: median {suggest_med * 1e6:8.2f}us  "
+        f"p95 {percentile(suggest_s, 95) * 1e6:8.2f}us  "
+        f"p99 {percentile(suggest_s, 99) * 1e6:8.2f}us  max {max(suggest_s) * 1e6:8.2f}us"
+    )
+    ratio = suggest_med / score_med if score_med else 0.0
+    print(f"  overhead ratio (suggest / scoring): {ratio:.2f}x")
+    print(
+        f"  full-corpus suggest pass: {sum(suggest_s) * 1e6:.1f}us (the cost --no-suggest removes)"
+    )
+    print("\n  per kind (median per fn):")
+    for kind in sorted(by_kind):
+        times = by_kind[kind]
+        print(f"    {kind:18s}  n={len(times):<3d}  {statistics.median(times) * 1e6:8.2f}us")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--mode", choices=("compute", "sweep"), default="compute")
+    parser.add_argument("--mode", choices=("compute", "sweep", "suggest"), default="compute")
     parser.add_argument("-n", "--runs", type=int, default=20)
     parser.add_argument("--warmup", type=int, default=1, help="discarded warmup runs")
     parser.add_argument("--depth", type=int, default=15, help="nesting depth")
@@ -130,6 +227,10 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.mode == "sweep":
         run_sweep([50, 100, 200, 400, 800], args.depth, args.repeats, args.runs, args.warmup)
+        return
+
+    if args.mode == "suggest":
+        run_suggest(args.repeats, args.runs, args.warmup)
         return
 
     funcdef = _build_large_function(args.depth, args.breadth)
