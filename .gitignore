@@ -110,3 +110,8 @@ venv.bak/
 
 # Parallel task board (local-only, not shipped)
 .parallel/
+
+# uv writes an empty lock here on every `uv run` because the dir has a
+# pyproject.toml, but cococo is a setup.py library with no [project] deps to
+# lock — so the file is a transient artifact, not a real lockfile.
+uv.lock

@@ -5,21 +5,25 @@ cognitive complexity of Python functions.
 
 This is a fork of [Melevir/cognitive_complexity](https://github.com/Melevir/cognitive_complexity)
 (MIT) that adds a command-line tool, modern-Python construct support, and
-Python 3.10+ packaging. The importable package and distribution are still
-named `cognitive_complexity`; the repo and CLI are `cococo`.
+Python 3.10+ packaging. Three names differ on purpose: install **`codecoco`**,
+import **`cognitive_complexity`**, run **`cococo`** (`cognitive_complexity` and
+`cococo` were both already taken on PyPI, so the distribution is published as
+`codecoco`).
 
 ## Installation
 
-Not published to PyPI — install from the repository:
-
 ```bash
-pip install git+https://github.com/qwhex/cococo
+pip install codecoco
 # or, with uv:
-uv pip install git+https://github.com/qwhex/cococo
+uv pip install codecoco
 ```
 
 This installs the `cococo` command and the importable `cognitive_complexity`
-package.
+package. To install the unreleased tip from the repository instead:
+
+```bash
+pip install git+https://github.com/qwhex/cococo
+```
 
 ## Usage
 
