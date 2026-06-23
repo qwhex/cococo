@@ -1,10 +1,12 @@
-def count_matches(groups):
-    found = 0
-    for group in groups:
-        if group.active:
-            for item in group.items:
-                if item.matches:
-                    found += 1
-                    if item.bonus:
-                        found += 10
-    return found
+def aggregate(rows):
+    total = 0
+    count = 0
+    weight = 0
+    for r in rows:
+        if r.active:
+            for v in r.values:
+                if v > 0:
+                    total += v
+                    count += 1
+                    weight += v * r.factor
+    return total, count, weight

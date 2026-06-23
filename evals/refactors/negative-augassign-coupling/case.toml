@@ -1,14 +1,13 @@
 kind = "extract_helper"
-entry = "count_matches"
+entry = "aggregate"
 negative = true
 forbidden_kind = "extract_helper"
-known_gap = true
-source = "brainstorm EX-A3-12"
+source = "brainstorm EX-A3-12 (sharpened to isolate the coupling fix)"
 notes = """\
-`found` is read AND written across the region via `found += ...`, so extracting it \
-would need a return-and-reassign — high coupling. The engine WRONGLY suggests \
-extract_helper today because `_analyze_coupling` does not count an AugAssign target \
-as both a read and a write. Fix: in refactor._name_coupling_role, treat an \
-ast.AugAssign target Name as both region_loads and region_stores (and \
-defined_before/used_after by position). Flip known_gap off once fixed.\
+Three accumulators (total/count/weight) are read AND written in the region via \
+`+=` and returned. Extracting the region would need all three threaded in and out \
+(coupling 7 > _MAX_COUPLING), so the engine must NOT suggest extract_helper. This \
+only holds once `_analyze_coupling` counts an AugAssign target as both a read and a \
+write; before that fix the accumulators counted as outputs only (coupling 4) and \
+extract_helper wrongly fired.\
 """

@@ -1,0 +1,10 @@
+kind = "extract_helper"
+entry = "process"
+expected_min_reduction = 3
+detect = true
+source = "coupling-fix coverage: AugAssign accumulators sit before and after the extracted region"
+notes = """\
+The heavy `rows` region is extractable (the `seen` accumulator lives outside it), \
+so extract_helper fires. Exercises `_augmented_load_role` for an AugAssign before \
+the region (`seen += 1`) and after it (`seen += 2`).\
+"""

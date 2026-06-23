@@ -227,6 +227,9 @@ def _analyze_coupling(funcdef: AnyFuncdef, region: ast.stmt) -> int:
         if role is not None:
             bucket, name = role
             buckets[bucket].add(name)
+        aug = _augmented_load_role(node, start, end)
+        if aug is not None:
+            buckets[aug[0]].add(aug[1])
 
     inputs = region_loads & defined_before
     outputs = region_stores & used_after
@@ -245,6 +248,24 @@ def _name_coupling_role(node: ast.AST, start: int, end: int) -> tuple[str, str] 
         return "region_loads", node.id
     if start <= lineno <= end and isinstance(node.ctx, ast.Store):
         return "region_stores", node.id
+    return None
+
+
+def _augmented_load_role(node: ast.AST, start: int, end: int) -> tuple[str, str] | None:
+    """An augmented assignment (``x += 1``) also READS its target.
+
+    Python gives an ``AugAssign`` target ``Store`` context, so the implicit load is
+    invisible to :func:`_name_coupling_role`. Without this, an in-region accumulator
+    counts as an output only, under-counting coupling and letting unsafe
+    extractions through.
+    """
+    if not (isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name)):
+        return None
+    lineno = node.target.lineno
+    if start <= lineno <= end:
+        return "region_loads", node.target.id
+    if lineno > end:
+        return "used_after", node.target.id
     return None
 
 
