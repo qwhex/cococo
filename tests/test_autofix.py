@@ -23,7 +23,7 @@ def test_flattens_trailing_if_in_function_body():
         """).strip()
     after, count = fix_source(before)
     assert count == 1
-    assert "if not (x):" in after
+    assert "if not x:" in after
     assert "    return\n" in after
     # The body moved up one level and the score dropped.
     assert _score(after) < _score(before)
@@ -240,6 +240,105 @@ def test_inverts_compound_condition_with_parentheses():
     # Precedence-broken form must NOT appear.
     assert "if not a and b:" not in after
     ast.parse(after)
+
+
+def _guarded(test_src: str) -> str:
+    """Wrap a guard test in a flattenable function body and return the fixed source.
+
+    The single ``if {test_src}:`` is the last statement of the body and wraps a
+    nested breaker, so :func:`fix_source` inverts ``test_src`` into an early-return
+    guard. Lets the style tests below assert purely on the inverted condition.
+    """
+    before = (
+        "def f(container, k, block, items):\n"
+        f"    if {test_src}:\n"
+        "        for i in items:\n"
+        "            if i:\n"
+        "                go(i)\n"
+    )
+    after, count = fix_source(before)
+    assert count == 1
+    ast.parse(after)  # every rewrite must stay valid Python
+    return after
+
+
+def test_drops_redundant_parens_around_atomic_call():
+    # `if isinstance(...):` must invert to `if not isinstance(...):`, NOT
+    # `if not (isinstance(...)):` — the outer parens are redundant noise that
+    # ruff format / review would strip.
+    after = _guarded("isinstance(container, list)")
+    assert "if not isinstance(container, list):" in after
+    assert "not (isinstance(container, list))" not in after
+
+
+def test_drops_redundant_parens_around_bare_name():
+    after = _guarded("container")
+    assert "if not container:" in after
+    assert "not (container)" not in after
+
+
+def test_drops_redundant_parens_around_attribute_access():
+    after = _guarded("container.ready")
+    assert "if not container.ready:" in after
+    assert "not (container.ready)" not in after
+
+
+def test_inverts_membership_with_not_in_operator():
+    # `if k in block:` must invert to `if k not in block:` — NOT `if not (k in
+    # block):`, which ruff's SIM/E713 rules flag and rewrite.
+    after = _guarded("k in block")
+    assert "if k not in block:" in after
+    assert "not (k in block)" not in after
+
+
+def test_inverts_negative_membership_back_to_in():
+    after = _guarded("k not in block")
+    assert "if k in block:" in after
+    assert "not (k not in block)" not in after
+
+
+def test_inverts_identity_with_is_not_operator():
+    # `if k is block:` must invert to `if k is not block:` — NOT `if not (k is
+    # block):`, which trips E714.
+    after = _guarded("k is block")
+    assert "if k is not block:" in after
+    assert "not (k is block)" not in after
+
+
+def test_inverts_negative_identity_back_to_is():
+    after = _guarded("k is not block")
+    assert "if k is block:" in after
+    assert "not (k is not block)" not in after
+
+
+def test_keeps_parens_around_boolean_op():
+    # `and`/`or` bind looser than `not`, so the wrapper is required for
+    # correctness — this is NOT a redundant-paren case and must be preserved.
+    after = _guarded("container and block")
+    assert "if not (container and block):" in after
+
+
+def test_keeps_safe_wrapper_for_ordering_comparison():
+    # `not (k < block)` must NOT become `k >= block`: the two disagree for NaN
+    # operands, so ordering/equality comparisons keep the safe wrapper.
+    after = _guarded("k < block")
+    assert "if not (k < block):" in after
+    assert "k >= block" not in after
+
+
+def test_keeps_safe_wrapper_for_equality_comparison():
+    # `not (k == block)` must NOT become `k != block`: a class can define
+    # `__eq__`/`__ne__` inconsistently, so equality keeps the safe wrapper too.
+    after = _guarded("k == block")
+    assert "if not (k == block):" in after
+    assert "k != block" not in after
+
+
+def test_keeps_safe_wrapper_for_chained_membership():
+    # A chained comparison (`a in b in c`) has no single-operator inversion;
+    # fall back to the wrapper rather than mangle it.
+    after = _guarded("k in block in container")
+    assert "if not (k in block in container):" in after
 
 
 def test_preserves_crlf_line_endings():

@@ -7,6 +7,21 @@ All notable changes to cococo are documented here. The format is based on
 a score — even a bug fix — is a major release, because it can flip a downstream
 `--max` gate red or green.
 
+## [3.5.0] - 2026-06-23
+
+### Fixed
+
+- `--fix` now emits clean inverted conditions instead of blindly wrapping every
+  guard condition in `not (...)`. Redundant parentheses around atomic conditions
+  are dropped (`not (isinstance(x, list))` → `not isinstance(x, list)`), and
+  membership/identity comparisons are negated through their operator
+  (`not (k in block)` → `k not in block`; `not (k is x)` → `k is not x`) so the
+  output no longer trips `ruff`/`pycodestyle` `E713`/`E714` or needs a follow-up
+  `ruff format` pass. Ordering/equality comparisons (`<`, `==`, …), boolean
+  `and`/`or`, and chained comparisons keep the safe `not (...)` wrapper, since
+  flipping them is not always behavior-preserving (e.g. `not (x < y)` differs
+  from `x >= y` for `NaN`). Output only; complexity scores are unchanged.
+
 ## [3.4.1] - 2026-06-17
 
 ### Fixed

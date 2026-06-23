@@ -506,7 +506,7 @@ def test_fix_rewrites_file_and_lowers_score(tmp_path, capsys):
     assert main([str(path), "--fix", "--min", "0"]) == 0
     after = {f.qualname: f.score for f in scored_functions([str(path)])}
     assert after["f"] < before["f"]
-    assert "if not (x):" in path.read_text()
+    assert "if not x:" in path.read_text()
     err = capsys.readouterr().err
     assert "guard-clause fix(es)" in err  # aggregate rollup
     assert f"fixed {path}" in err  # per-file audit trail (ae65)

@@ -157,13 +157,62 @@ def _dedent(line: str, unit: int) -> str:
     return line[unit:] if line[:unit] == " " * unit else line
 
 
+# Membership/identity comparisons whose negation is *guaranteed* to be another
+# comparison by the language spec: ``x not in y`` is defined as ``not (x in y)``
+# and ``x is not y`` as ``not (x is y)``. Ordering and equality operators are
+# deliberately absent — ``not (x < y)`` differs from ``x >= y`` for NaN, and a
+# class may define ``__eq__``/``__ne__`` inconsistently — so those keep the safe
+# ``not (...)`` wrapper rather than risk a behaviour change.
+_NEGATED_CMP: dict[type[ast.cmpop], str] = {
+    ast.In: "not in",
+    ast.NotIn: "in",
+    ast.Is: "is not",
+    ast.IsNot: "is",
+}
+
+# ``not X`` reassociates when ``X`` binds looser than ``not`` (``not a and b`` is
+# ``(not a) and b``), so these constructs need the wrapping parens; calls, names,
+# and attributes bind tighter and the parens would be redundant noise a formatter
+# strips. ``Compare`` is included because the membership/identity cases that *can*
+# be inverted cleanly are flipped earlier (in :func:`_flip_comparison`) and never
+# reach here — only the ones kept as ``not (...)`` for safety (ordering, equality,
+# chained) fall through, and ``not k in a in b`` without parens would still trip
+# the very ``E713`` lint we are trying to avoid.
+_NEEDS_PARENS = (ast.BoolOp, ast.IfExp, ast.Lambda, ast.NamedExpr, ast.Compare)
+
+
 def _inverted_condition(test: ast.expr, source: str) -> str:
     if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
         inner = ast.get_source_segment(source, test.operand)
         if inner is not None:
             return inner
+    flipped = _flip_comparison(test, source)
+    if flipped is not None:
+        return flipped
     segment = ast.get_source_segment(source, test)
-    return f"not ({segment})"
+    if isinstance(test, _NEEDS_PARENS):
+        return f"not ({segment})"
+    return f"not {segment}"
+
+
+def _flip_comparison(test: ast.expr, source: str) -> str | None:
+    """Negate a single membership/identity comparison by flipping its operator.
+
+    Returns ``None`` for anything that is not a one-operator ``in``/``is``
+    comparison — chained comparisons (``a in b in c``), other operators, and
+    non-comparisons fall back to the ``not (...)`` wrapper in the caller.
+    """
+    if not isinstance(test, ast.Compare) or len(test.ops) != 1:
+        return None
+    operator = _NEGATED_CMP.get(type(test.ops[0]))
+    if operator is None:
+        return None
+    # Operands of a freshly-parsed comparison always carry position info, so
+    # get_source_segment never returns None here — same assumption the caller
+    # makes for the whole-test segment.
+    left = ast.get_source_segment(source, test.left)
+    right = ast.get_source_segment(source, test.comparators[0])
+    return f"{left} {operator} {right}"
 
 
 def atomic_write(path: Path, data: str) -> None:
