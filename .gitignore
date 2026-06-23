@@ -118,3 +118,6 @@ uv.lock
 
 # Local agent guide (CLAUDE.md) — kept out of the repo intentionally.
 CLAUDE.md
+
+# Scratch / in-progress design docs — not shipped.
+docs/temp/
