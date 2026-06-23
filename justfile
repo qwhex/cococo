@@ -28,9 +28,18 @@ typecheck:
 test:
     python -m pytest --cov=cognitive_complexity --cov-report=xml --cov-fail-under=100
 
-# Lint the README
+# Lint the README. mdl is a Ruby gem; CI installs it (Ruby 3.3) and enforces it.
+# Locally it's optional — if it isn't installed, warn and skip rather than hard-
+# fail the gate (and `just release`) on a missing external linter. When mdl IS
+# present its exit code propagates, so real lint failures still fail the recipe.
 check-readme:
-    mdl README.md
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if command -v mdl >/dev/null 2>&1; then
+        mdl README.md
+    else
+        echo "mdl not installed — skipping README lint (CI enforces it)"
+    fi
 
 # Install git hooks: pre-push runs `just check`, the same gate as CI
 install-hooks:
