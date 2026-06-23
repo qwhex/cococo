@@ -70,6 +70,9 @@ check-dist: build
 release:
     #!/usr/bin/env bash
     set -euo pipefail
+    # Use the project venv without requiring manual activation (CI has no .venv
+    # and gets `python` from setup-python, so this is a no-op there).
+    [ -x .venv/bin/python ] && export PATH="$PWD/.venv/bin:$PATH"
     branch=$(git rev-parse --abbrev-ref HEAD)
     [ "$branch" = "master" ] || { echo "release must be cut from master (on $branch)"; exit 1; }
     # Only the version + changelog may be uncommitted; everything else must be in.
