@@ -13,6 +13,7 @@ from cognitive_complexity.detectors import (
     extract_helper,
     extract_predicate,
     guard_clause,
+    merge_nested_if,
     split_dispatcher,
 )
 from cognitive_complexity.detectors.base import (
@@ -30,6 +31,7 @@ REGISTRY: list[Detector] = [
     extract_helper.detect,
     split_dispatcher.detect,
     extract_predicate.detect,
+    merge_nested_if.detect,
 ]
 
 __all__ = ["Suggestion", "suggest_refactors"]

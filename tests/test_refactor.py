@@ -366,6 +366,50 @@ def test_match_with_guard_is_not_a_dispatcher():
     )
 
 
+# ── merge_nested_if tests ─────────────────────────────────────────────────────
+
+
+def test_merge_nested_if_suggested_for_double_if():
+    suggestions = _suggest("""
+    def f(a, b, c):
+        for x in c:
+            if a:
+                if b:
+                    do(x)
+    """)
+    merge = next((s for s in suggestions if s.kind == "merge_nested_if"), None)
+    assert merge is not None
+    assert merge.autofixable is False
+    assert merge.estimated_reduction >= 1
+
+
+def test_merge_nested_if_not_suggested_when_outer_has_else():
+    assert "merge_nested_if" not in _kinds(
+        _suggest("""
+    def f(a, b):
+        if a:
+            if b:
+                return "both"
+        else:
+            return "no a"
+    """)
+    )
+
+
+def test_merge_nested_if_not_suggested_when_inner_has_else():
+    assert "merge_nested_if" not in _kinds(
+        _suggest("""
+    def f(a, b, c):
+        for x in c:
+            if a:
+                if b:
+                    return "both"
+                else:
+                    return "a only"
+    """)
+    )
+
+
 def test_match_with_or_patterns_is_still_a_dispatcher():
     # `case "a" | "b"` is a simple OR of value patterns, so the match still reads
     # as a value dispatch and the suggestion stands.

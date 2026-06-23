@@ -1,0 +1,5 @@
+kind = "merge_nested_if"
+entry = "check_both"
+negative = true
+forbidden_kind = "merge_nested_if"
+notes = "Outer if has an else branch — merging would change behavior, detector must NOT fire."
