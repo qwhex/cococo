@@ -2,15 +2,16 @@
 
 Scores every function and method in the given Python files/directories with
 :func:`cognitive_complexity.api.get_cognitive_complexity` and prints them
-worst-first. With ``--max`` it doubles as a gate: it exits non-zero when any
-function exceeds the ceiling, reporting each offender with concrete refactor
-suggestions.
+worst-first, with concrete refactor suggestions inline by default. With ``--max``
+it doubles as a gate: it exits non-zero when any function exceeds the ceiling,
+reporting each offender (with the same suggestions) on stderr.
 
 Usage::
 
-    cococo src/                  # list every function, worst first
+    cococo src/                  # list worst-first, with suggestions inline
     cococo src/ --max 20         # gate: fail (with suggestions) above 20
     cococo a.py b.py --min 10    # only show functions scoring >= 10
+    cococo src/ --suggest-min 10 # only suggest on functions scoring >= 10
     cococo src/ --max 20 --json  # machine-readable report for a pipeline
     cococo src/ --fix            # apply safe guard-clause rewrites in place
     cococo src/ --nested fold    # pre-2.0.0 scoring (fold nested defs into parent)
@@ -35,7 +36,7 @@ from cognitive_complexity.api import Contribution, get_cognitive_complexity_brea
 from cognitive_complexity.autofix import atomic_write, fix_source
 from cognitive_complexity.common_types import AnyFuncdef, ScoredFunction, SkippedFile
 from cognitive_complexity.discovery import find_function, iter_python_files, parse_target, scan
-from cognitive_complexity.refactor import suggest_refactors
+from cognitive_complexity.refactor import Suggestion, suggest_refactors
 from cognitive_complexity.report import build_report, func_key, is_over, to_json
 
 
@@ -91,6 +92,14 @@ def main(argv: list[str] | None = None) -> int:
         "--min", type=int, default=0, help="only list functions scoring at least this much"
     )
     parser.add_argument(
+        "--suggest-min",
+        type=int,
+        default=None,
+        metavar="N",
+        help="show inline refactor suggestions for functions scoring at least N "
+        "(default: same as --min). Applies to the default listing, not the --max gate.",
+    )
+    parser.add_argument(
         "--explain",
         metavar="FILE::QUAL",
         default=None,
@@ -123,6 +132,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     fold_nested = args.nested == "fold"
+    suggest_min = _resolve_suggest_min(args.suggest_min, args.min)
 
     if args.explain is not None:
         return explain(args.explain, fold_nested)
@@ -141,7 +151,15 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     _warn_unused_ignores(functions, args.max)
     scan_code = _scan_exit_code(
-        functions, skipped, scanned, args.max, args.as_json, args.min, baseline, baseline_root
+        functions,
+        skipped,
+        scanned,
+        args.max,
+        args.as_json,
+        args.min,
+        suggest_min,
+        baseline,
+        baseline_root,
     )
     # A failed --fix write, or a file skipped under a gate, is a hard failure (2)
     # regardless of whether the functions that *did* scan stayed within --max.
@@ -207,6 +225,11 @@ def _warn_unused_ignores(functions: list[ScoredFunction], max_: int | None) -> N
             )
 
 
+def _resolve_suggest_min(suggest_min: int | None, min_: int) -> int:
+    """The suggestion threshold defaults to ``--min`` but can be tuned separately."""
+    return suggest_min if suggest_min is not None else min_
+
+
 def _scan_exit_code(
     functions: list[ScoredFunction],
     skipped: list[SkippedFile],
@@ -214,14 +237,17 @@ def _scan_exit_code(
     max_: int | None,
     as_json: bool,
     min_: int,
+    suggest_min: int,
     baseline: dict[str, int] | None,
     baseline_root: Path | None,
 ) -> int:
     if as_json:
-        return _report_json(functions, skipped, scanned, max_, min_, baseline, baseline_root)
+        return _report_json(
+            functions, skipped, scanned, max_, min_, suggest_min, baseline, baseline_root
+        )
     if not functions:
         return _empty_scan_exit(max_)
-    return _report(functions, max_, min_, baseline, baseline_root)
+    return _report(functions, max_, min_, suggest_min, baseline, baseline_root)
 
 
 def _empty_scan_exit(max_: int | None) -> int:
@@ -290,12 +316,18 @@ def _report(
     functions: list[ScoredFunction],
     max_: int | None,
     min_: int,
+    suggest_min: int,
     baseline: dict[str, int] | None,
     baseline_root: Path | None,
 ) -> int:
-    """Print the scored functions and, when ``max_`` is set, gate on it."""
-    for f in _shown(functions, max_, min_):
-        print(f"{f.score:4d}  {f.path}:{f.lineno}  {f.qualname}")
+    """Print the scored functions and, when ``max_`` is set, gate on it.
+
+    In the default listing (no ``--max``) each function scoring at least
+    ``suggest_min`` carries its refactor suggestions inline, so the actionable
+    advice is the default output rather than a gate-only diagnostic. Under a gate
+    the listing stays terse and suggestions are reported with the offenders.
+    """
+    _print_listing(_shown(functions, max_, min_), max_ is None, suggest_min)
 
     if max_ is None:
         return 0
@@ -313,6 +345,7 @@ def _report_json(
     scanned: int,
     max_: int | None,
     min_: int,
+    suggest_min: int,
     baseline: dict[str, int] | None,
     baseline_root: Path | None,
 ) -> int:
@@ -320,6 +353,7 @@ def _report_json(
         _shown(functions, max_, min_),
         max_,
         min_,
+        suggest_min,
         skipped,
         scanned,
         baseline,
@@ -329,6 +363,28 @@ def _report_json(
     if not functions and max_ is not None:
         return 2  # gate scanned nothing — fail loud even in JSON mode
     return 1 if max_ is not None and report["exceeded"] else 0
+
+
+def _suggestion_line(s: Suggestion) -> str:
+    fix = " [--fix]" if s.autofixable else ""
+    return (
+        f"    - {s.title} "
+        f"(lines {s.line_start}-{s.line_end}, ~-{s.estimated_reduction} "
+        f"-> {s.estimated_complexity_after}){fix}"
+    )
+
+
+def _print_listing(shown: list[ScoredFunction], with_suggestions: bool, suggest_min: int) -> None:
+    """Print each function's score line to stdout, with suggestions inline when asked.
+
+    Listing mode shows only real suggestions; unlike the gate it stays silent when
+    none apply (no "no mechanical refactor found" line) so a clean listing is quiet.
+    """
+    for f in shown:
+        print(f"{f.score:4d}  {f.path}:{f.lineno}  {f.qualname}")
+        if with_suggestions and f.score >= suggest_min:
+            for s in suggest_refactors(f.funcdef, f.breakdown):
+                print(_suggestion_line(s))
 
 
 def _print_gate_failure(over: list[ScoredFunction], max_: int) -> None:
@@ -347,13 +403,7 @@ def _print_suggestions(f: ScoredFunction, max_: int) -> None:
         print("    (no mechanical refactor found; split it by responsibility)", file=sys.stderr)
         return
     for s in suggestions:
-        fix = " [--fix]" if s.autofixable else ""
-        print(
-            f"    - {s.title} "
-            f"(lines {s.line_start}-{s.line_end}, ~-{s.estimated_reduction} "
-            f"-> {s.estimated_complexity_after}){fix}",
-            file=sys.stderr,
-        )
+        print(_suggestion_line(s), file=sys.stderr)
 
 
 if __name__ == "__main__":  # pragma: no cover

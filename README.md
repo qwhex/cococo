@@ -30,9 +30,10 @@ pip install git+https://github.com/qwhex/cococo
 ### Command line
 
 ```bash
-cococo src/                  # score every function, worst first
+cococo src/                  # score worst-first, with refactor suggestions inline
 cococo src/ --max 20         # gate: exit non-zero if any function exceeds 20
-cococo a.py b.py --min 10    # only show functions scoring >= 10
+cococo a.py b.py --min 10    # only list functions scoring >= 10
+cococo src/ --suggest-min 10 # only attach suggestions to functions scoring >= 10
 cococo src/ --max 20 --json  # machine-readable report for a pipeline
 cococo src/ --fix            # apply safe guard-clause rewrites in place
 cococo src/ --nested fold    # pre-2.0.0 scoring: fold nested defs into the parent
@@ -56,18 +57,22 @@ scored by its inner function) as a migration aid; the same is available in the
 library as `get_cognitive_complexity(funcdef, fold_nested=True)`. See
 [CHANGELOG.md](CHANGELOG.md).
 
-### Refactor suggestions on a failing gate
+### Refactor suggestions
 
-When `--max` is exceeded, each offending function is reported on stderr together
-with a few concrete, mechanical refactors and an estimated complexity drop — so
-a human (or an agent) reading the failure knows what to do next:
+Beyond reporting a score, cococo points at what to *do* about a complex
+function: the default listing prints concrete, mechanical refactors inline —
+each with the lines it touches and an estimated complexity drop:
 
 ```text
-cococo: 1 function(s) exceed cognitive complexity 5
-  src/load.py:42 load = 14 (>5)
+  14  src/load.py:42  load
     - Extract this block into a helper function (lines 50-61, ~-7 -> 7)
     - Flatten nested block with a guard clause (lines 45-61, ~-3 -> 11) [--fix]
 ```
+
+`--suggest-min N` attaches suggestions only to functions scoring at least `N`
+(it defaults to `--min`), to focus the output on the worst offenders. Under a
+`--max` gate the offending functions are reported on stderr with the same
+suggestions instead, so a failing CI step says exactly what to fix.
 
 Suggestions tagged `[--fix]` can be applied automatically. `--fix` rewrites only
 transforms it can prove keep behavior identical (an `if` with no `else` that is

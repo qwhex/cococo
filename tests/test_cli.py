@@ -281,12 +281,55 @@ def test_baseline_key_falls_back_to_absolute_when_file_outside_baseline_dir(tmp_
     assert key.startswith("/") and key.endswith("m.py::f")
 
 
+def _listed_quals(out: str) -> list[str]:
+    """Qualnames from the score lines, ignoring inline suggestion lines (`    - ...`)."""
+    return [
+        line.split()[-1] for line in out.splitlines() if line and not line.lstrip().startswith("-")
+    ]
+
+
 def test_main_lists_all_functions_worst_first(tmp_path, capsys):
     # Plain listing mode (no --max): every function is printed, worst first.
     _write(tmp_path, "m.py", NESTED + FLAT)
     assert main([str(tmp_path)]) == 0
-    quals = [line.split()[-1] for line in capsys.readouterr().out.splitlines() if line]
-    assert quals == ["f", "g"]  # f (10) ranks above g (0)
+    assert _listed_quals(capsys.readouterr().out) == ["f", "g"]  # f (10) ranks above g (0)
+
+
+def test_default_listing_shows_inline_suggestions(tmp_path, capsys):
+    # Suggestions are the default output, not a gate-only diagnostic: a plain run
+    # (no --max) prints them inline on stdout for the complex function.
+    _write(tmp_path, "m.py", NESTED + FLAT)
+    assert main([str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert "guard clause" in out.lower()
+    assert "[--fix]" in out
+
+
+def test_default_listing_stays_silent_when_no_suggestion_applies(tmp_path, capsys):
+    # Unlike the gate, listing mode does not print the "no mechanical refactor"
+    # line — a function with no applicable refactor just shows its score.
+    _write(tmp_path, "m.py", NO_SUGGESTION)
+    assert main([str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert "busy" in out
+    assert "no mechanical refactor" not in out
+
+
+def test_suggest_min_filters_inline_suggestions(tmp_path, capsys):
+    # --suggest-min raises the bar for inline suggestions independently of --min:
+    # the function is still listed, but above its score it carries no suggestions.
+    _write(tmp_path, "m.py", NESTED)
+    assert main([str(tmp_path), "--suggest-min", "999"]) == 0
+    out = capsys.readouterr().out
+    assert "f" in _listed_quals(out)
+    assert "guard clause" not in out.lower()
+
+
+def test_suggest_min_filters_json_suggestions(tmp_path, capsys):
+    _write(tmp_path, "m.py", NESTED)
+    assert main([str(tmp_path), "--json", "--suggest-min", "999"]) == 0
+    [func] = json.loads(capsys.readouterr().out)["functions"]
+    assert func["suggestions"] == []
 
 
 # --- refactor suggestions, JSON output, and --fix (added with the refactor feature) ---
