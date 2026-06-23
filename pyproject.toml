@@ -58,7 +58,7 @@ max-complexity = 20
 "cognitive_complexity/cli.py" = ["T201"]  # CLI prints its results to stdout by design
 "cognitive_complexity/discovery.py" = ["T201"]  # scanner reports skipped files to stderr by design
 "tests/*.py" = ["T201", "S101"]
-"benchmarks/*.py" = ["T201", "S101", "S603"]  # benchmark shells out to pytest on trusted local paths
+"benchmarks/*.py" = ["T201", "S101", "S603", "S607"]  # benchmark shells out to pytest/git on trusted local paths
 "evals/refactor_eval.py" = ["T201"]  # eval runner prints its result table by design
 
 [tool.mypy]

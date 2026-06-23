@@ -33,9 +33,13 @@ from __future__ import annotations
 
 import argparse
 import ast
+import json
 import statistics
+import subprocess
 import time
 from collections import defaultdict
+from datetime import datetime
+from pathlib import Path
 
 from cognitive_complexity.api import (
     get_cognitive_complexity,
@@ -165,13 +169,11 @@ def _per_call(work: object, repeats: int, runs: int, warmup: int) -> float:
     return statistics.median(once() for _ in range(runs))
 
 
-def run_suggest(repeats: int, runs: int, warmup: int) -> None:
-    """Time the suggestion engine over the eval corpus; report the overhead ratio."""
+def measure_suggest(repeats: int, runs: int, warmup: int) -> dict[str, object]:
+    """One full measurement pass over the eval corpus; returns summary metrics (us)."""
     corpus = _load_corpus()
     if not corpus:
-        print("no eval corpus found under evals/refactors/ — nothing to benchmark")
-        return
-
+        return {}
     score_s: list[float] = []
     suggest_s: list[float] = []
     by_kind: dict[str, list[float]] = defaultdict(list)
@@ -185,31 +187,84 @@ def run_suggest(repeats: int, runs: int, warmup: int) -> None:
         s = _per_call(lambda f=funcdef, b=breakdown: suggest_refactors(f, b), repeats, runs, warmup)
         suggest_s.append(s)
         by_kind[kind].append(s)
-
     score_med = statistics.median(score_s)
     suggest_med = statistics.median(suggest_s)
+    return {
+        "corpus_n": len(corpus),
+        "score_median_us": score_med * 1e6,
+        "suggest_median_us": suggest_med * 1e6,
+        "suggest_p95_us": percentile(suggest_s, 95) * 1e6,
+        "suggest_p99_us": percentile(suggest_s, 99) * 1e6,
+        "suggest_max_us": max(suggest_s) * 1e6,
+        "full_pass_us": sum(suggest_s) * 1e6,
+        "overhead_ratio": suggest_med / score_med if score_med else 0.0,
+        "by_kind_median_us": {k: statistics.median(v) * 1e6 for k, v in sorted(by_kind.items())},
+    }
+
+
+def _git_commit() -> str:
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, timeout=5
+        )
+        return out.stdout.strip() or "unknown"
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+
+
+def _append_log(path: Path, summary: dict[str, object], repeats: int, runs: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "ts": datetime.now().isoformat(timespec="seconds"),
+        "commit": _git_commit(),
+        "repeats": repeats,
+        "runs": runs,
+        **summary,
+    }
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry) + "\n")
+
+
+def _stat_line(label: str, values: list[float], unit: str) -> None:
+    mean = statistics.mean(values)
+    sd = statistics.stdev(values) if len(values) > 1 else 0.0
+    cv = (sd / mean * 100) if mean else 0.0
     print(
-        f"\nSuggestion overhead over {len(corpus)} eval functions "
-        f"({repeats} calls/run, median of {runs}):"
+        f"  {label:16s} mean {mean:8.2f}{unit}  stdev {sd:7.3f}{unit}  "
+        f"min {min(values):8.2f}{unit}  max {max(values):8.2f}{unit}  CV {cv:4.1f}%"
     )
+
+
+def run_suggest(repeats: int, runs: int, warmup: int, trials: int, log_path: Path) -> None:
+    """Run the suggest measurement ``trials`` times; log each and report stability."""
+    summaries: list[dict[str, object]] = []
+    for t in range(trials):
+        summary = measure_suggest(repeats, runs, warmup)
+        if not summary:
+            print("no eval corpus found under evals/refactors/ — nothing to benchmark")
+            return
+        summaries.append(summary)
+        _append_log(log_path, summary, repeats, runs)
+        print(
+            f"  trial {t + 1:>2}/{trials}: ratio {summary['overhead_ratio']:.2f}x  "
+            f"suggest median {summary['suggest_median_us']:.1f}us  "
+            f"p95 {summary['suggest_p95_us']:.1f}us"
+        )
+
+    last = summaries[-1]
     print(
-        f"  scoring (breakdown)  per fn: median {score_med * 1e6:8.2f}us  "
-        f"p95 {percentile(score_s, 95) * 1e6:8.2f}us"
+        f"\nSuggestion overhead over {last['corpus_n']} eval functions, "
+        f"{trials} trial(s) ({repeats} calls/run x {runs}):"
     )
-    print(
-        f"  suggestions          per fn: median {suggest_med * 1e6:8.2f}us  "
-        f"p95 {percentile(suggest_s, 95) * 1e6:8.2f}us  "
-        f"p99 {percentile(suggest_s, 99) * 1e6:8.2f}us  max {max(suggest_s) * 1e6:8.2f}us"
-    )
-    ratio = suggest_med / score_med if score_med else 0.0
-    print(f"  overhead ratio (suggest / scoring): {ratio:.2f}x")
-    print(
-        f"  full-corpus suggest pass: {sum(suggest_s) * 1e6:.1f}us (the cost --no-suggest removes)"
-    )
-    print("\n  per kind (median per fn):")
-    for kind in sorted(by_kind):
-        times = by_kind[kind]
-        print(f"    {kind:18s}  n={len(times):<3d}  {statistics.median(times) * 1e6:8.2f}us")
+    _stat_line("overhead ratio", [float(s["overhead_ratio"]) for s in summaries], "x")
+    _stat_line("suggest median", [float(s["suggest_median_us"]) for s in summaries], "us")
+    _stat_line("suggest p95", [float(s["suggest_p95_us"]) for s in summaries], "us")
+    by_kind = last["by_kind_median_us"]
+    assert isinstance(by_kind, dict)
+    print("\n  per kind (median per fn, last trial):")
+    for kind, value in by_kind.items():
+        print(f"    {kind:18s}  {value:8.2f}us")
+    print(f"\n  appended {trials} trial(s) to {log_path}")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -223,6 +278,14 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--depth", type=int, default=15, help="nesting depth")
     parser.add_argument("--breadth", type=int, default=200, help="compute mode: statements")
     parser.add_argument("--repeats", type=int, default=1000, help="scorings timed per run")
+    parser.add_argument(
+        "--trials", type=int, default=1, help="suggest mode: full measurement passes (stability)"
+    )
+    parser.add_argument(
+        "--log",
+        default="benchmarks/results/suggest.jsonl",
+        help="suggest mode: JSONL file to append each trial's summary to",
+    )
     args = parser.parse_args(argv)
 
     if args.mode == "sweep":
@@ -230,7 +293,7 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if args.mode == "suggest":
-        run_suggest(args.repeats, args.runs, args.warmup)
+        run_suggest(args.repeats, args.runs, args.warmup, args.trials, Path(args.log))
         return
 
     funcdef = _build_large_function(args.depth, args.breadth)
