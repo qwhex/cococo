@@ -58,6 +58,7 @@ def build_report(
     max_: int | None,
     min_: int,
     suggest_min: int,
+    suggest: bool,
     skipped: list[SkippedFile],
     files_scanned: int,
     baseline: dict[str, int] | None = None,
@@ -71,7 +72,9 @@ def build_report(
     tree. ``over``/``exceeded`` honor ``# cococo: ignore`` and the baseline.
     Suggestions are attached to functions scoring at least ``suggest_min``.
     """
-    entries = [_func_entry(func, max_, suggest_min, baseline, baseline_root) for func in funcs]
+    entries = [
+        _func_entry(func, max_, suggest_min, suggest, baseline, baseline_root) for func in funcs
+    ]
     return {
         "max": max_,
         "min": min_,
@@ -86,11 +89,13 @@ def _func_entry(
     func: ScoredFunction,
     max_: int | None,
     suggest_min: int,
+    suggest: bool,
     baseline: dict[str, int] | None,
     baseline_root: Path | None,
 ) -> dict[str, object]:
     breakdown = func.breakdown
-    suggestions = suggest_refactors(func.funcdef, breakdown) if func.score >= suggest_min else []
+    emit = suggest and func.score >= suggest_min
+    suggestions = suggest_refactors(func.funcdef, breakdown) if emit else []
     return {
         "path": str(func.path),
         "lineno": func.lineno,

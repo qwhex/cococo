@@ -34,6 +34,7 @@ cococo src/                  # score worst-first, with refactor suggestions inli
 cococo src/ --max 20         # gate: exit non-zero if any function exceeds 20
 cococo a.py b.py --min 10    # only list functions scoring >= 10
 cococo src/ --suggest-min 10 # only attach suggestions to functions scoring >= 10
+cococo src/ --max 20 --no-suggest  # gate only: skip suggestions (faster for CI)
 cococo src/ --max 20 --json  # machine-readable report for a pipeline
 cococo src/ --fix            # apply safe guard-clause rewrites in place
 cococo src/ --nested fold    # pre-2.0.0 scoring: fold nested defs into the parent
@@ -72,7 +73,9 @@ each with the lines it touches and an estimated complexity drop:
 `--suggest-min N` attaches suggestions only to functions scoring at least `N`
 (it defaults to `--min`), to focus the output on the worst offenders. Under a
 `--max` gate the offending functions are reported on stderr with the same
-suggestions instead, so a failing CI step says exactly what to fix.
+suggestions instead, so a failing CI step says exactly what to fix. `--no-suggest`
+skips suggestion computation entirely — a faster path for a CI gate that only
+needs the pass/fail.
 
 Suggestions tagged `[--fix]` can be applied automatically. `--fix` rewrites only
 transforms it can prove keep behavior identical (an `if` with no `else` that is

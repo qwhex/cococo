@@ -100,6 +100,12 @@ def main(argv: list[str] | None = None) -> int:
         "(default: same as --min). Applies to the default listing, not the --max gate.",
     )
     parser.add_argument(
+        "--no-suggest",
+        action="store_true",
+        help="skip refactor suggestions entirely (faster — for CI gates that only "
+        "need the pass/fail and don't read the advice)",
+    )
+    parser.add_argument(
         "--explain",
         metavar="FILE::QUAL",
         default=None,
@@ -133,6 +139,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     fold_nested = args.nested == "fold"
     suggest_min = _resolve_suggest_min(args.suggest_min, args.min)
+    suggest = not args.no_suggest
 
     if args.explain is not None:
         return explain(args.explain, fold_nested)
@@ -158,6 +165,7 @@ def main(argv: list[str] | None = None) -> int:
         args.as_json,
         args.min,
         suggest_min,
+        suggest,
         baseline,
         baseline_root,
     )
@@ -238,16 +246,17 @@ def _scan_exit_code(
     as_json: bool,
     min_: int,
     suggest_min: int,
+    suggest: bool,
     baseline: dict[str, int] | None,
     baseline_root: Path | None,
 ) -> int:
     if as_json:
         return _report_json(
-            functions, skipped, scanned, max_, min_, suggest_min, baseline, baseline_root
+            functions, skipped, scanned, max_, min_, suggest_min, suggest, baseline, baseline_root
         )
     if not functions:
         return _empty_scan_exit(max_)
-    return _report(functions, max_, min_, suggest_min, baseline, baseline_root)
+    return _report(functions, max_, min_, suggest_min, suggest, baseline, baseline_root)
 
 
 def _empty_scan_exit(max_: int | None) -> int:
@@ -317,6 +326,7 @@ def _report(
     max_: int | None,
     min_: int,
     suggest_min: int,
+    suggest: bool,
     baseline: dict[str, int] | None,
     baseline_root: Path | None,
 ) -> int:
@@ -326,14 +336,16 @@ def _report(
     ``suggest_min`` carries its refactor suggestions inline, so the actionable
     advice is the default output rather than a gate-only diagnostic. Under a gate
     the listing stays terse and suggestions are reported with the offenders.
+    ``--no-suggest`` (``suggest=False``) drops suggestions everywhere — the gate
+    then never computes them, which is the fast path for CI.
     """
-    _print_listing(_shown(functions, max_, min_), max_ is None, suggest_min)
+    _print_listing(_shown(functions, max_, min_), max_ is None and suggest, suggest_min)
 
     if max_ is None:
         return 0
     over = [f for f in functions if is_over(f, max_, baseline, baseline_root)]
     if over:
-        _print_gate_failure(over, max_)
+        _print_gate_failure(over, max_, suggest)
         return 1
     print(f"cococo: all {len(functions)} functions within cognitive complexity {max_}")
     return 0
@@ -346,6 +358,7 @@ def _report_json(
     max_: int | None,
     min_: int,
     suggest_min: int,
+    suggest: bool,
     baseline: dict[str, int] | None,
     baseline_root: Path | None,
 ) -> int:
@@ -354,6 +367,7 @@ def _report_json(
         max_,
         min_,
         suggest_min,
+        suggest,
         skipped,
         scanned,
         baseline,
@@ -387,18 +401,20 @@ def _print_listing(shown: list[ScoredFunction], with_suggestions: bool, suggest_
                 print(_suggestion_line(s))
 
 
-def _print_gate_failure(over: list[ScoredFunction], max_: int) -> None:
+def _print_gate_failure(over: list[ScoredFunction], max_: int, suggest: bool) -> None:
     print(
         f"\ncococo: {len(over)} function(s) exceed cognitive complexity {max_}",
         file=sys.stderr,
     )
     for f in sorted(over, key=lambda f: f.score, reverse=True):
-        _print_suggestions(f, max_)
+        _print_suggestions(f, max_, suggest)
 
 
-def _print_suggestions(f: ScoredFunction, max_: int) -> None:
-    suggestions = suggest_refactors(f.funcdef, f.breakdown)
+def _print_suggestions(f: ScoredFunction, max_: int, suggest: bool) -> None:
     print(f"  {f.path}:{f.lineno} {f.qualname} = {f.score} (>{max_})", file=sys.stderr)
+    if not suggest:
+        return
+    suggestions = suggest_refactors(f.funcdef, f.breakdown)
     if not suggestions:
         print("    (no mechanical refactor found; split it by responsibility)", file=sys.stderr)
         return

@@ -332,6 +332,33 @@ def test_suggest_min_filters_json_suggestions(tmp_path, capsys):
     assert func["suggestions"] == []
 
 
+def test_no_suggest_drops_inline_suggestions(tmp_path, capsys):
+    # --no-suggest: the listing shows scores only, no suggestion lines.
+    _write(tmp_path, "m.py", NESTED + FLAT)
+    assert main([str(tmp_path), "--no-suggest"]) == 0
+    out = capsys.readouterr().out
+    assert _listed_quals(out) == ["f", "g"]
+    assert "guard clause" not in out.lower()
+
+
+def test_no_suggest_gate_shows_offenders_without_suggestions(tmp_path, capsys):
+    # The gate still fails and lists offenders, but computes no suggestions.
+    _write(tmp_path, "m.py", NESTED)
+    assert main([str(tmp_path), "--max", "5", "--no-suggest"]) == 1
+    err = capsys.readouterr().err
+    assert "exceed cognitive complexity 5" in err
+    assert "f = 10 (>5)" in err
+    assert "guard clause" not in err.lower()
+    assert "no mechanical refactor" not in err
+
+
+def test_no_suggest_empties_json_suggestions(tmp_path, capsys):
+    _write(tmp_path, "m.py", NESTED)
+    assert main([str(tmp_path), "--json", "--no-suggest"]) == 0
+    [func] = json.loads(capsys.readouterr().out)["functions"]
+    assert func["suggestions"] == []
+
+
 # --- refactor suggestions, JSON output, and --fix (added with the refactor feature) ---
 
 NO_SUGGESTION = """
