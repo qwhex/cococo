@@ -404,9 +404,20 @@ def test_gate_failure_prints_actionable_suggestions(tmp_path, capsys):
 
 
 def test_gate_failure_handles_functions_with_no_mechanical_fix(tmp_path, capsys):
+    # A trivial offender (under a strict --max) with no pattern and too little
+    # complexity for the decompose fallback falls through to the generic note.
+    _write(tmp_path, "m.py", "def tiny(a):\n    if a:\n        emit(a)\n")
+    assert main([str(tmp_path), "--max", "0"]) == 1
+    assert "no mechanical refactor found" in capsys.readouterr().err
+
+
+def test_gate_failure_falls_back_to_decompose_for_scattered_complexity(tmp_path, capsys):
+    # The scattered-branches shape no longer dead-ends: the fallback points at a span.
     _write(tmp_path, "m.py", NO_SUGGESTION)
     assert main([str(tmp_path), "--max", "5"]) == 1
-    assert "no mechanical refactor found" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "Split by responsibility" in err
+    assert "no mechanical refactor found" not in err
 
 
 def test_json_output_is_valid_and_structured(tmp_path, capsys):

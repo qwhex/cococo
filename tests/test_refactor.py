@@ -241,6 +241,57 @@ def test_suggestions_are_capped_and_sorted_by_reduction():
     assert reductions == sorted(reductions, reverse=True)
 
 
+def test_scattered_guards_fall_back_to_decompose_by_span():
+    # No region is extractable and no dispatch/predicate pattern matches, but the
+    # function is complex — the fallback points at the heaviest span.
+    suggestions = _suggest("""
+    def handle(req):
+        log(req)
+        if req.token is None:
+            raise Unauthorized()
+        if req.user is None:
+            raise NotFound()
+        if req.banned:
+            raise Forbidden()
+        if not req.payload:
+            raise BadRequest()
+        if req.expired:
+            raise Expired()
+        return commit(req)
+    """)
+    assert _kinds(suggestions) == {"decompose_by_span"}
+
+
+def test_fallback_silent_when_a_named_refactor_fires():
+    # When extract_helper (or any named detector) fires, the fallback must not.
+    suggestions = _suggest("""
+    def f(a, b, items):
+        result = 0
+        for x in items:
+            if x > 0:
+                if x % 2:
+                    result += x
+                for y in range(x):
+                    if y:
+                        result -= y
+        return result
+    """)
+    assert "decompose_by_span" not in _kinds(suggestions)
+
+
+def test_fallback_silent_on_simple_function():
+    # A small function with no pattern and little complexity gets no fallback.
+    assert (
+        _suggest("""
+    def f(a):
+        if a:
+            return 1
+        return 0
+    """)
+        == []
+    )
+
+
 def test_nested_functions_are_not_walked_as_regions():
     # The inner def's control flow is its own unit; the outer function's region
     # walk ignores it, so a trivial factory yields no region-based suggestions.

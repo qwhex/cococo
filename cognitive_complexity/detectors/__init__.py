@@ -10,6 +10,7 @@ from __future__ import annotations
 from cognitive_complexity.api import Contribution
 from cognitive_complexity.common_types import AnyFuncdef
 from cognitive_complexity.detectors import (
+    decompose_by_span,
     extract_helper,
     extract_predicate,
     flatten_else_after_return,
@@ -52,7 +53,10 @@ def suggest_refactors(funcdef: AnyFuncdef, breakdown: list[Contribution]) -> lis
     candidates: list[Suggestion] = []
     for detect in REGISTRY:
         candidates += detect(ctx)
-    return _select(candidates)
+    selected = _select(candidates)
+    # Fallback only when no named refactor fits, so a complex but pattern-less
+    # function still gets a concrete pointer instead of a dead end.
+    return selected or decompose_by_span.fallback(ctx)
 
 
 def _select(candidates: list[Suggestion]) -> list[Suggestion]:
