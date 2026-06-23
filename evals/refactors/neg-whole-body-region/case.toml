@@ -1,0 +1,12 @@
+kind = "extract_helper"
+entry = "process"
+negative = true
+forbidden_kind = "extract_helper"
+source = "catalog EX-N2"
+notes = """\
+The single `for` region spans the entire function body: its points equal the \
+function total (10/10). The `points < total` guard in `_region_suggestions` \
+suppresses `extract_helper` — extracting it would just rename the function. \
+A `guard_clause` may legitimately fire on the inner `if item.ready:`, so \
+`silent = true` is not used here.\
+"""

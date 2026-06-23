@@ -1,0 +1,6 @@
+kind = "extract_predicate"
+entry = "process"
+expected_min_reduction = 1
+detect = false
+source = "catalog EX-A5-8"
+notes = "shared prefix condition duplicated across if/elif branches; each bool-op scores only +1 (pure and chain, no nested BoolOps) -> engine stays silent; extracting to a named predicate reduces score by 1"

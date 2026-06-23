@@ -1,0 +1,7 @@
+kind = "guard_clause"
+entry = "first_match"
+expected_min_reduction = 2
+detect = false
+autofixable = false
+source = "EX-A2-9 (walrus-gated nested if -> single and-condition)"
+notes = "C2 merge_nested_if is not yet implemented; reduction is real (bad=6, good=4) but detect=false. autofixable=false: fix_source turns the outer walrus-if into a guard+continue rather than merging the two ifs."

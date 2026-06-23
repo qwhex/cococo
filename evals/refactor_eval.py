@@ -177,9 +177,18 @@ def _grade_behavior(case: Case, bad_src: str, good_src: str) -> tuple[str, str]:
     return PASS, f"{len(case.behavior)} input(s) match"
 
 
+def _safe_grade(case: Case) -> CaseResult:
+    try:
+        return grade_case(case)
+    except Exception as exc:  # the CLI table should survive one broken case
+        r = CaseResult(case)
+        r.axes["load"] = (FAIL, f"{type(exc).__name__}: {exc}")
+        return r
+
+
 def main() -> int:
     cases = load_cases()
-    results = [grade_case(c) for c in cases]
+    results = [_safe_grade(c) for c in cases]
     width = max((len(c.id) for c in cases), default=4)
     n_fail = 0
     for r in results:

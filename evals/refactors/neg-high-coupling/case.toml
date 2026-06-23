@@ -1,0 +1,14 @@
+kind = "extract_helper"
+entry = "summarise"
+negative = true
+forbidden_kind = "extract_helper"
+source = "catalog EX-N3 (expanded)"
+notes = """\
+The `if a:` block (lines 3-10) is extractable-looking: 10/11 points, 8 lines, \
+no boundary-crossing returns. But it reads `b, c, d, e` (4 params defined \
+before) and produces `p, q, r` (3 vars used after) — total coupling 7 > \
+`_MAX_COUPLING` (4). Extraction would require threading all those in and out, \
+so `extract_helper` is suppressed. The trailing `if a:` region ensures the \
+heavy block's points (10) are less than the function total (11), ruling out \
+the whole-body guard as the cause.\
+"""

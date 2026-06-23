@@ -1,0 +1,7 @@
+kind = "split_dispatcher"
+entry = "http_label"
+expected_min_reduction = 1
+detect = true
+behavior = ["http_label(200)", "http_label(404)", "http_label(999)"]
+source = "catalog EX-A2-3"
+notes = "match with OR-pattern arms over int literals; expand OR-patterns to individual dict keys"

@@ -1,0 +1,15 @@
+kind = "extract_helper"
+entry = "fetch_with_retry"
+expected_min_reduction = 7
+detect = false
+source = "brainstorm EX-A1-5"
+notes = """\
+Retry wrapper with per-attempt try/except + status branching. \
+Reduction-only: the engine does not detect `extract_helper` here because \
+the loop body contains `return` and `raise` statements that cross the \
+extraction boundary, so `_is_extractable_region` returns False. \
+The good.py manually applies the extraction via a sentinel-value pattern \
+(`_try_fetch` returns None on non-200/non-error, caller checks), \
+dropping the bad entry from 10 to 3 (-7). External deps (time.sleep, \
+session.get, HTTPError) so no `behavior` axis.\
+"""

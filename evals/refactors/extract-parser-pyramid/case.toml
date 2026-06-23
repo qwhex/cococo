@@ -1,0 +1,7 @@
+kind = "extract_helper"
+entry = "parse_message"
+expected_min_reduction = 27
+detect = true
+autofixable = false
+source = "EX-A4-7 (classic arrow/pyramid in a parser function)"
+notes = "Deeply nested for/if pyramid (bad=28) extracted into _parse_body helper (entry drops to 1, helper=12). Detection emits extract_helper with reduction=27. No behavior exprs: bad.py references KNOWN_TAGS which is only defined in good.py stubs."

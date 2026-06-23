@@ -1,0 +1,6 @@
+kind = "split_dispatcher"
+entry = "dispatch"
+expected_min_reduction = 5
+detect = true
+source = "catalog EX-A5-3"
+notes = "elif ladder on event.kind attribute; handler callables in dict; default via .get fallback"

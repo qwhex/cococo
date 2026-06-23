@@ -1,0 +1,13 @@
+kind = "extract_helper"
+entry = "handle_event"
+expected_min_reduction = 20
+detect = true
+source = "brainstorm EX-A4-8"
+notes = """\
+if/elif/else dispatcher where the `data` arm carries the bulk of the score \
+(6 nested conditions, ~20 pts) while the other arms are trivial. The engine \
+emits `extract_helper` on the elif arm region (lines 4-12, 22/23 pts). \
+After extraction the entry drops from 23 to 3 (-20); the helper scores 15, \
+which is under the bad entry score (23). No `behavior` axis: external deps \
+(clock, store, log).\
+"""

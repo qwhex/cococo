@@ -1,0 +1,6 @@
+kind = "extract_predicate"
+entry = "should_cache"
+expected_min_reduction = 2
+detect = true
+source = "catalog EX-A5-4"
+notes = "mixed and/or (outer and + inner or) produces 2 nested BoolOps -> bool-op scores 2, triggering extract_predicate; reduction removes if+bool-op points"

@@ -1,0 +1,6 @@
+kind = "extract_predicate"
+entry = "active_admins"
+expected_min_reduction = 1
+detect = false
+source = "catalog EX-A2-1"
+notes = "comprehension bool-op with 4 operands scores only +1 (no nested BoolOps) -> below _PREDICATE_MIN_POINTS; naming the predicate removes the bool-op and the comprehension-if point"

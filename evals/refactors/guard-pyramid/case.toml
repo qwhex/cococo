@@ -1,0 +1,7 @@
+kind = "guard_clause"
+entry = "import_user"
+expected_min_reduction = 3
+detect = true
+autofixable = true
+source = "EX-A4-1 (stacked validation guards peeling the pyramid)"
+notes = "Three nested ifs with no else collapse to three flat guard returns (bad=6, good=3). fix_source applies two passes (leaves the third guard in place as it has no nested breaker). Detection emits guard_clause on the outermost if."
