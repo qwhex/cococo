@@ -1,0 +1,7 @@
+kind = "flatten_else_after_return"
+entry = "process"
+expected_min_reduction = 3
+detect = true
+autofixable = false
+source = "C8 flatten_else_after_return"
+notes = "bad=7, good=4. else point (1) + for de-nest (1) + if de-nest (1) = reduction 3."

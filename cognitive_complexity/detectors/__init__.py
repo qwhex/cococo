@@ -12,6 +12,7 @@ from cognitive_complexity.common_types import AnyFuncdef
 from cognitive_complexity.detectors import (
     extract_helper,
     extract_predicate,
+    flatten_else_after_return,
     guard_clause,
     merge_nested_if,
     split_dispatcher,
@@ -32,6 +33,7 @@ REGISTRY: list[Detector] = [
     split_dispatcher.detect,
     extract_predicate.detect,
     merge_nested_if.detect,
+    flatten_else_after_return.detect,
 ]
 
 __all__ = ["Suggestion", "suggest_refactors"]

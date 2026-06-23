@@ -427,3 +427,83 @@ def test_match_with_or_patterns_is_still_a_dispatcher():
                 return 4
     """)
     )
+
+
+# ── flatten_else_after_return tests ───────────────────────────────────────────
+
+
+def test_flatten_else_suggested_when_if_body_terminates_and_else_is_nested():
+    # An if that always returns, followed by an else with nested constructs:
+    # the detector fires because the else is redundant and removing it de-nests.
+    suggestions = _suggest("""
+    def process(items, flag):
+        if flag:
+            return None
+        else:
+            for item in items:
+                if item.active:
+                    handle(item)
+            return len(items)
+    """)
+    match = next((s for s in suggestions if s.kind == "flatten_else_after_return"), None)
+    assert match is not None
+    assert match.autofixable is False
+    assert match.estimated_reduction >= 2
+
+
+def test_flatten_else_not_suggested_for_elif():
+    # When the orelse is a single If node (an elif chain), the detector must
+    # stay silent — an elif is structural, not a redundant else.
+    assert "flatten_else_after_return" not in _kinds(
+        _suggest("""
+    def f(n):
+        if n > 0:
+            return 1
+        elif n == 0:
+            return 0
+        else:
+            for x in range(10):
+                if x:
+                    do(x)
+            return -1
+    """)
+    )
+
+
+def test_flatten_else_not_suggested_when_if_body_does_not_always_terminate():
+    # The outer if body falls through when strict is False — the else is NOT
+    # redundant.  Dropping it would silently change behaviour.
+    assert "flatten_else_after_return" not in _kinds(
+        _suggest("""
+    def check(n, strict):
+        if n < 0:
+            if strict:
+                return -1
+        else:
+            for x in range(10):
+                if x > 5:
+                    process(x)
+            return 1
+    """)
+    )
+
+
+def test_flatten_else_suggested_when_if_body_ends_in_exhaustive_inner_if():
+    # The if body ends with an inner if/else where both branches return —
+    # every path terminates, so the outer else is still redundant.
+    suggestions = _suggest("""
+    def f(n, items):
+        if n > 0:
+            if n > 10:
+                return "big"
+            else:
+                return "small"
+        else:
+            for item in items:
+                if item:
+                    handle(item)
+            return "nonpositive"
+    """)
+    match = next((s for s in suggestions if s.kind == "flatten_else_after_return"), None)
+    assert match is not None
+    assert match.estimated_reduction >= 2
