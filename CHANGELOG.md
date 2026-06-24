@@ -7,6 +7,40 @@ All notable changes to cococo are documented here. The format is based on
 a score — even a bug fix — is a major release, because it can flip a downstream
 `--max` gate red or green.
 
+## [3.7.0] - 2026-06-24
+
+### Added
+
+- Four new refactor-suggestion detectors, all output-only (no complexity score
+  changes): `merge_nested_if` collapses `if a:` / `if b:` into `if a and b:`
+  (`52202b3`); `flatten_else_after_return` drops a redundant `else` after a
+  terminal `if` body (`15ebb2a`); `sequential_dispatch` turns an
+  `if x == k: return …` ladder into a dispatch table (`60e3ea6`); and a
+  `decompose_by_span` fallback points at the heaviest span to split when no named
+  refactor matches — replacing the old "no mechanical refactor found" dead end
+  (`b7e9937`).
+- `--no-suggest` flag: skip refactor-suggestion computation entirely, a faster path
+  for CI gates that only need the pass/fail (`fe795b2`).
+- A refactor-suggestion eval set under `evals/refactors/` (gated by the test suite)
+  plus a `suggest` benchmark mode (`python -m benchmarks.run_benchmark --mode
+  suggest`) that tracks the suggestion-vs-scoring overhead ratio — the regression
+  guards for the suggestion engine (`6b3452c`, `b9e0735`).
+
+### Changed
+
+- The refactor-suggestion engine moved from a single `refactor.py` into a
+  `detectors/` package: one self-contained module per kind plus a shared toolkit,
+  with control-flow regions computed once per function so adding detectors no
+  longer re-walks the AST. **`Suggestion` and `suggest_refactors` now import from
+  `cognitive_complexity.detectors`** (previously `cognitive_complexity.refactor`)
+  (`6d925eb`, `1bd6337`).
+
+### Fixed
+
+- Coupling analysis now counts an augmented assignment (`x += 1`) as both a read
+  and a write, so `extract_helper` is correctly suppressed for regions that carry
+  an accumulator across the boundary (`e5075b4`).
+
 ## [3.6.0] - 2026-06-23
 
 ### Added
