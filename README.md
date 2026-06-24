@@ -147,7 +147,7 @@ The suggestion engine is importable too:
 
 ```python
 from cognitive_complexity.api import get_cognitive_complexity_breakdown
-from cognitive_complexity.refactor import suggest_refactors
+from cognitive_complexity.detectors import suggest_refactors
 
 breakdown = get_cognitive_complexity_breakdown(funcdef)
 for s in suggest_refactors(funcdef, breakdown):
