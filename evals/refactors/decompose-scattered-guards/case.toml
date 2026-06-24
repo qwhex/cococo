@@ -2,5 +2,5 @@ kind = "decompose_by_span"
 entry = "handle"
 expected_min_reduction = 4
 detect = true
-source = "catalog EX-C7 (scattered guards, no named refactor fits)"
+source = "decompose_by_span fallback (scattered guards, no named refactor fits)"
 notes = "five flat raise-guards: no region is extractable and no dispatch/predicate pattern matches, so the fallback points at the validation span to pull into a helper"

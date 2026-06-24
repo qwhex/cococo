@@ -5,4 +5,4 @@ detect = false
 autofixable = false
 behavior = ["find_admin([]) is None", "find_admin([type('U', (), {'role': 'user'})()] ) is None", "getattr(find_admin([type('U', (), {'role': 'admin'})()] ), 'role', None)"]
 source = "EX-A2-7 (for/else where loop exits via return, not break -> drop cosmetic else)"
-notes = "C8 flatten_else_after_return is not yet implemented; the for/else costs +1 nesting penalty on the for-node (bad=4, good=3). detect=false. autofixable=false: fix_source does not handle for/else."
+notes = "deliberate boundary: flatten_else_after_return handles if/else, not for/else. This for/else drop is a distinct low-value micro-case (bad=4, good=3), left as reduction-only data."

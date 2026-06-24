@@ -2,7 +2,7 @@ kind = "flatten_else_after_return"
 entry = "check"
 negative = true
 forbidden_kind = "flatten_else_after_return"
-source = "C8 negative: non-terminal if body"
+source = "flatten_else_after_return negative: non-terminal if body"
 notes = """\
 The outer if body does NOT always terminate: `if strict: return -1` falls \
 through when strict is False. Dropping the else would silently change behaviour \

@@ -4,7 +4,7 @@ The existing ``split_dispatcher`` only recognises ``elif`` ladders and ``match``
 this catches the same refactor written as separate top-level ``if`` statements.
 Emits the same ``split_dispatcher`` kind (it is the same refactor).
 
-Soundness guards (per the spec's hardened C1):
+Soundness guards:
 - the subject is side-effect-free (``Name``/``Attribute``/``Subscript`` only — never a
   ``Call``), so collapsing N comparisons to one lookup can't change call counts;
 - every arm is truly terminal (its body ends in ``return``/``raise``); a fall-through
