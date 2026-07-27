@@ -7,6 +7,75 @@ All notable changes to cococo are documented here. The format is based on
 a score — even a bug fix — is a major release, because it can flip a downstream
 `--max` gate red or green.
 
+## [4.0.0] - 2026-07-27
+
+Bugfix release from a full-codebase audit; major per the score-as-contract rule
+because the boolean-operand fix moves scores.
+
+### Changed
+
+- **Constructs nested inside boolean operands now score.** The scorer previously
+  stopped walking at a `BoolOp`, so ternaries, comprehensions, lambdas, and
+  recursive calls inside `and`/`or` operands scored 0 — e.g.
+  `a and (b if c else d)` was 1, now 2 — and unit mode missed recursion in
+  operands (`x and f(x-1)`) that fold mode counted. A boolean expression tree
+  still counts once, at its own nesting level, so plain chains like
+  `a and b and c` are unchanged (`f663262`).
+- Breakdown attribution: `for`/`while` `else` gets its own labeled `else` entry
+  instead of being folded into the loop's points, and `else` line numbers now
+  point at the line just after the branch above rather than the first body
+  statement. Totals are unchanged; visible in `--explain` and `--json`
+  (`f663262`).
+- Directory scans prune hidden directories and `venv`/`site-packages`/
+  `node_modules`/`build`/`dist`/`__pycache__`/`*.egg-info` by default — `cococo
+  . --fix` no longer rewrites your `.venv` (`f1d0c81`).
+- `--explain` setup failures (missing file, unknown qualname, unparseable
+  source) exit 2, not 1 — exit 1 now always means "over the ceiling". Scripts
+  branching on the old code must update (`f1d0c81`).
+- Detector reduction estimates are derived from the score breakdown instead of
+  arm counts: a flat `match` is worth its actual +1 (now below the suggestion
+  noise floor rather than over-stated ~3x), `elif` ladders and sequential
+  dispatch runs report the points they really remove, and overlapping
+  suggestions are suppressed across kinds so reductions no longer sum past the
+  function total (`c7011e4`).
+- The `[--fix]` badge (and `autofixable` in `--json`) appears only on guards the
+  rewriter will genuinely apply — mid-block guards keep the advice, lose the
+  false promise (`c7011e4`).
+
+### Added
+
+- `--exclude PATTERN` (repeatable, fnmatch on name or path) for directory scans
+  and `--fix` (`f1d0c81`).
+- Encoding and newline fidelity: sources are read via `tokenize.detect_encoding`
+  (PEP 263 declarations and UTF-8 BOM now score instead of being skipped) and
+  written back in their own codec; CRLF files stay CRLF through `--fix`
+  (`f1d0c81`).
+- `--fix` safety: skips symlinked files (preserving the link) and files modified
+  between read and write, names each skip on stderr, and explains
+  tab-indentation refusals instead of silently reporting "applied 0"
+  (`f1d0c81`).
+- Eval harness rigor: detection is asserted by default (opt-out requires
+  `forbidden_kind` + notes), `known_gap = true` produces a visible XFAIL that
+  fails once the gap closes, `silent` is a real composable assertion, and a new
+  always-on `fix_claim` axis fails any case whose suggestions over-claim
+  autofixability (`aff0b93`).
+- Wider gates: mypy strict, the complexity ceiling, and the 100% coverage floor
+  now also cover `evals/`; `benchmarks/` is held to ruff + mypy strict + the
+  ceiling as a declared exemption from coverage (`aff0b93`).
+
+### Fixed
+
+- Fold-mode scoring of decorator factories no longer changes when the factory
+  gains a docstring (`f663262`).
+- The `--baseline` ratchet file is written atomically and is never created from
+  a run whose scan was untrusted (skipped files or failed `--fix` writes)
+  (`f1d0c81`).
+- Recursive functions are no longer advised to extract their entire body by the
+  decompose-by-span fallback (`c7011e4`).
+- `just check` warns loudly on a skipped README lint and `just release` refuses
+  to run without `mdl`, so a green local gate can no longer silently be weaker
+  than CI (`aff0b93`).
+
 ## [3.7.0] - 2026-06-24
 
 ### Added
