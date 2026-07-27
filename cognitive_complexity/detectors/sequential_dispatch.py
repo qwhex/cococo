@@ -24,6 +24,7 @@ from cognitive_complexity.detectors.base import (
     Suggestion,
     make_suggestion,
     simple_equality_test,
+    subtree_points,
 )
 
 KIND = "split_dispatcher"
@@ -39,7 +40,7 @@ STEPS = (
 def detect(ctx: DetectorContext) -> list[Suggestion]:
     out: list[Suggestion] = []
     for block in _statement_blocks(ctx.funcdef):
-        out += _runs_in_block(block, ctx.total)
+        out += _runs_in_block(block, ctx)
     return out
 
 
@@ -70,7 +71,7 @@ def _sub_blocks(stmt: ast.stmt) -> list[list[ast.stmt]]:
     return out
 
 
-def _runs_in_block(block: list[ast.stmt], total: int) -> list[Suggestion]:
+def _runs_in_block(block: list[ast.stmt], ctx: DetectorContext) -> list[Suggestion]:
     out: list[Suggestion] = []
     i = 0
     while i < len(block):
@@ -80,7 +81,7 @@ def _runs_in_block(block: list[ast.stmt], total: int) -> list[Suggestion]:
             continue
         end, keys = _extend_run(block, i, arm[0])
         if (end - i) >= DISPATCH_MIN_ARMS and len(set(keys)) == len(keys):
-            out.append(_run_suggestion(block, i, end, total))
+            out.append(_run_suggestion(block, i, end, ctx))
         i = end
     return out
 
@@ -98,17 +99,20 @@ def _extend_run(block: list[ast.stmt], start: int, subject: str) -> tuple[int, l
     return j, keys
 
 
-def _run_suggestion(block: list[ast.stmt], start: int, end: int, total: int) -> Suggestion:
+def _run_suggestion(
+    block: list[ast.stmt], start: int, end: int, ctx: DetectorContext
+) -> Suggestion:
     last = block[end - 1]
+    end_line = last.end_lineno or last.lineno
     return make_suggestion(
         kind=KIND,
         title=TITLE,
         steps=STEPS,
         autofixable=AUTOFIXABLE,
         start=block[start].lineno,
-        end=last.end_lineno or last.lineno,
-        reduction=(end - start) - 1,
-        total=total,
+        end=end_line,
+        reduction=subtree_points(ctx.breakdown, block[start].lineno, end_line),
+        total=ctx.total,
     )
 
 

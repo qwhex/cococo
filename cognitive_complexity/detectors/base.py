@@ -232,17 +232,26 @@ def _augmented_load_role(node: ast.AST, start: int, end: int) -> tuple[str, str]
 # --- dispatch / equality-chain / match matching --------------------------------
 
 
-def dispatch_reduction(region: ast.stmt) -> int:
-    """Points a dispatch-table refactor would remove from ``region`` (0 if N/A)."""
+def dispatch_reduction(region: ast.stmt, breakdown: list[Contribution]) -> int:
+    """Points a dispatch-table refactor would remove from ``region`` (0 if N/A).
+
+    The arm count decides only whether the region *is* a dispatch; what it is worth
+    comes from the breakdown, as every estimate must. Counting arms instead
+    over-states a ``match`` (the scorer charges it +1 in total, however many cases)
+    and under-states a ladder inside a loop (each arm costs 1 + its nesting).
+    """
+    if not _is_dispatchable(region):
+        return 0
+    return subtree_points(breakdown, region.lineno, region.end_lineno or region.lineno)
+
+
+def _is_dispatchable(region: ast.stmt) -> bool:
+    """Whether ``region`` is a value dispatch a table could replace."""
     if isinstance(region, ast.If):
-        arms = elif_arms(region) if is_simple_equality_chain(region) else 0
-        return arms if arms >= DISPATCH_MIN_ARMS else 0
+        return is_simple_equality_chain(region) and elif_arms(region) >= DISPATCH_MIN_ARMS
     if isinstance(region, ast.Match):
-        if _has_structural_patterns(region):
-            return 0
-        cases = len(region.cases)
-        return cases - 1 if cases >= DISPATCH_MIN_CASES else 0
-    return 0
+        return not _has_structural_patterns(region) and len(region.cases) >= DISPATCH_MIN_CASES
+    return False
 
 
 def is_simple_equality_chain(node: ast.If) -> bool:

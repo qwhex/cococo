@@ -22,7 +22,7 @@ STEPS = (
 def detect(ctx: DetectorContext) -> list[Suggestion]:
     out: list[Suggestion] = []
     for region in ctx.regions:
-        reduction = dispatch_reduction(region)
+        reduction = dispatch_reduction(region, ctx.breakdown)
         if reduction:
             end = region.end_lineno or region.lineno
             out.append(

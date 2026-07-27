@@ -5,7 +5,13 @@ with no ``else`` that is the *last* statement of a function body or loop body is
 rewritten into an early ``return``/``continue`` guard, and its body de-indented
 one level. Because the ``if`` is last, returning/continuing early when the
 condition is false changes nothing. Anything that fails the strict preconditions
-in :func:`_is_safe_guard` is left exactly as it was.
+in :func:`is_flattenable_guard` is left exactly as it was.
+
+That precondition is AST-only on purpose: the ``guard_clause`` detector calls it
+(via :func:`flattenable_guard_ids`) to decide whether a suggestion may advertise
+``[--fix]``, so the badge and the rewriter cannot drift apart. The one check that
+needs the source text — tab indentation — stays here, and the guards it costs are
+counted by :func:`refused_guards` so ``--fix`` can say why it did nothing.
 
 Edits are made on the source text (not via ``ast.unparse``) so comments and
 formatting in the untouched body survive.
@@ -26,10 +32,12 @@ from __future__ import annotations
 
 import ast
 import os
+import stat
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 
-from cognitive_complexity.common_types import is_funcdef
+from cognitive_complexity.common_types import AnyFuncdef, is_funcdef
 
 # The transform is idempotent (a flattened guard is no longer the last statement
 # of its block), so this only caps pathological input; it is never reached in
@@ -66,15 +74,33 @@ def fix_source(source: str) -> tuple[str, int]:
     return source, fixes
 
 
+def refused_guards(source: str) -> int:
+    """Flattenable guards this rewriter still declines, on source-text grounds.
+
+    Only tab indentation lands here: every other precondition is AST-visible, so
+    :func:`is_flattenable_guard` already keeps the ``[--fix]`` badge off those. Lets
+    ``--fix`` explain a zero instead of reporting it silently.
+    """
+    if "\t" not in source:
+        return 0
+    return sum(1 for node, _ in _tail_guards(ast.parse(source)) if _indent_unit(node, source) <= 0)
+
+
 def _find_guard(tree: ast.AST, source: str) -> tuple[ast.If, str] | None:
-    candidates: list[tuple[ast.If, str]] = []
-    for block, keyword in _guarded_blocks(tree):
-        last = block[-1] if block else None
-        if isinstance(last, ast.If) and _is_safe_guard(last, source):
-            candidates.append((last, keyword))
+    candidates = [(n, kw) for n, kw in _tail_guards(tree) if _indent_unit(n, source) > 0]
     if not candidates:
         return None
     return min(candidates, key=lambda c: c[0].lineno)
+
+
+def _tail_guards(tree: ast.AST) -> list[tuple[ast.If, str]]:
+    """Every block-final ``if`` in ``tree`` that the AST-only precondition accepts."""
+    guards: list[tuple[ast.If, str]] = []
+    for block, keyword in _guarded_blocks(tree):
+        last = block[-1] if block else None
+        if isinstance(last, ast.If) and is_flattenable_guard(last):
+            guards.append((last, keyword))
+    return guards
 
 
 def _guarded_blocks(tree: ast.AST) -> list[tuple[list[ast.stmt], str]]:
@@ -87,19 +113,39 @@ def _guarded_blocks(tree: ast.AST) -> list[tuple[list[ast.stmt], str]]:
     return blocks
 
 
-def _is_safe_guard(node: ast.If, source: str) -> bool:
+def flattenable_guard_ids(funcdef: AnyFuncdef, regions: Sequence[ast.stmt]) -> set[int]:
+    """``id()`` of every ``if`` in ``funcdef`` that ``--fix`` would rewrite.
+
+    Position matters as much as shape: an ``if`` is only safely invertible when it
+    ends its block, so the blocks are ``funcdef``'s own body plus the body of each
+    loop in ``regions`` (the detector's precomputed region list — no second walk).
+    Nested defs are separate units and are scored, and fixed, on their own.
+    """
+    blocks = [funcdef.body, *(r.body for r in regions if isinstance(r, _LOOP_TYPES))]
+    ids: set[int] = set()
+    for block in blocks:
+        last = block[-1]
+        if isinstance(last, ast.If) and is_flattenable_guard(last):
+            ids.add(id(last))
+    return ids
+
+
+def is_flattenable_guard(node: ast.If) -> bool:
+    """The AST-only half of the precondition, shared with the ``guard_clause`` detector.
+
+    Says nothing about position (see :func:`flattenable_guard_ids`) or indentation
+    (see :func:`refused_guards`) — only that the ``if`` itself has the shape the
+    rewrite needs.
+    """
     if node.orelse or not node.body:
         return False
-    body_first = node.body[0]
-    if body_first.lineno <= node.lineno:  # single-line `if x: ...`
+    if node.body[0].lineno <= node.lineno:  # single-line `if x: ...`
         return False
     if node.test.lineno != (node.test.end_lineno or node.test.lineno):  # multi-line test
         return False
     if not _has_nested_breaker(node.body):  # flattening would save nothing
         return False
-    if _has_multiline_string(node.body):  # blind dedent would corrupt string content
-        return False
-    return _indent_unit(node, source) > 0
+    return not _has_multiline_string(node.body)  # blind dedent would corrupt string content
 
 
 def _has_nested_breaker(body: list[ast.stmt]) -> bool:
@@ -215,23 +261,30 @@ def _flip_comparison(test: ast.expr, source: str) -> str | None:
     return f"{left} {operator} {right}"
 
 
-def atomic_write(path: Path, data: str) -> None:
-    """Overwrite ``path`` with ``data`` atomically, preserving its file mode.
+def atomic_write(path: Path, data: str, encoding: str = "utf-8") -> None:
+    """Write ``data`` to ``path`` atomically, preserving its file mode.
 
     Writes to a temp file in the same directory, fsyncs it, then ``os.replace``s
     it over ``path`` — atomic within a filesystem, so a crash mid-write leaves
-    the original file intact rather than truncated/half-written. The temp file is
-    removed if anything fails (including on interrupt). ``newline=""`` keeps the
-    data's line endings byte-for-byte (the transform may emit ``\\r\\n``).
+    the previous file intact rather than truncated/half-written, and a failed
+    write leaves no partial file at all. The temp file is removed if anything
+    fails (including on interrupt). ``newline=""`` keeps the data's line endings
+    byte-for-byte (the transform may emit ``\\r\\n``); ``encoding`` should be the
+    codec the source was read with, so a PEP 263 / BOM file is written back as
+    itself. A destination that does not exist yet keeps the temp file's mode.
+
+    The replace targets ``path`` itself: callers must not pass a symlink they
+    want to keep (see ``cli._fix_one_file``, which skips them).
     """
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     tmp_file = Path(tmp)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+        with os.fdopen(fd, "w", encoding=encoding, newline="") as handle:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-        tmp_file.chmod(path.stat().st_mode)
+        if path.exists():
+            tmp_file.chmod(stat.S_IMODE(path.stat().st_mode))
         tmp_file.replace(path)
     except BaseException:
         tmp_file.unlink(missing_ok=True)

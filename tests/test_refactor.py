@@ -41,6 +41,24 @@ def test_nested_if_chain_suggests_guard_clause():
     assert guard.estimated_complexity_after == total - guard.estimated_reduction
 
 
+def test_mid_block_guard_is_advised_without_the_autofix_promise():
+    # `if a:` is followed by `return total`, so inverting it into an early return
+    # is not behaviour-preserving and `--fix` refuses it. The advice still stands;
+    # the `[--fix]` badge must not.
+    src = """
+    def f(a, items):
+        total = 0
+        if a:
+            for x in items:
+                if x:
+                    total += x
+        return total
+    """
+    guard = next(s for s in _suggest(src) if s.kind == "guard_clause")
+    assert guard.estimated_reduction >= 2
+    assert guard.autofixable is False
+
+
 def test_guard_not_suggested_when_no_nested_savings():
     # A single `if` with a flat body saves nothing by flattening.
     assert "guard_clause" not in _kinds(
@@ -98,7 +116,9 @@ def test_sequential_if_chain_suggests_dispatcher():
         return 0
     """)
     dispatch = next(s for s in suggestions if s.kind == "split_dispatcher")
-    assert dispatch.estimated_reduction == 2  # 3 arms -> reduction == len - 1
+    # The run's breakdown points: three top-level ifs at 1 point each, all
+    # removed by the table lookup.
+    assert dispatch.estimated_reduction == 3
 
 
 def test_short_sequential_if_chain_does_not_suggest_dispatcher():
@@ -176,19 +196,30 @@ def test_short_elif_chain_does_not_suggest_dispatcher():
 
 
 def test_match_with_many_cases_suggests_dispatcher():
-    suggestions = _suggest("""
-    def f(cmd):
-        match cmd:
-            case "a":
-                return 1
-            case "b":
-                return 2
-            case "c":
-                return 3
-            case "d":
-                return 4
-    """)
-    assert "split_dispatcher" in _kinds(suggestions)
+    # A nested match costs 1 + its nesting level, so it clears the noise floor;
+    # the estimate is exactly what the breakdown charges for the match.
+    src = """
+    def f(cmds):
+        for cmd in cmds:
+            match cmd:
+                case "a":
+                    return 1
+                case "b":
+                    return 2
+                case "c":
+                    return 3
+                case "d":
+                    return 4
+    """
+    funcdef = ast.parse(src.strip()).body[0]
+    breakdown = get_cognitive_complexity_breakdown(funcdef)
+    total = sum(c.points for c in breakdown)
+    [dispatch] = [s for s in suggest_refactors(funcdef, breakdown) if s.kind == "split_dispatcher"]
+    match_points = sum(
+        c.points for c in breakdown if dispatch.line_start <= c.lineno <= dispatch.line_end
+    )
+    assert dispatch.estimated_reduction == match_points
+    assert dispatch.estimated_complexity_after == total - dispatch.estimated_reduction
 
 
 def test_small_match_does_not_suggest_dispatcher():
@@ -217,24 +248,33 @@ def test_complex_condition_suggests_extract_predicate():
 
 
 def test_suggestions_are_capped_and_sorted_by_reduction():
-    # This function offers more than three distinct refactors (guard, extract,
-    # dispatcher, predicate); the report keeps only the top three by reduction.
+    # Four separate hotspots (three nested blocks and a dispatch ladder) offer
+    # more than three refactors; the report keeps only the top three by reduction.
     suggestions = _suggest("""
-    def f(cmd, a, b, c, d, items):
-        if (a and b) or (c and d):
+    def f(cmd, items, others, rest):
+        if items:
             for x in items:
                 if x.ok:
                     for y in x.kids:
-                        if y:
-                            emit(y)
+                        emit(y)
         if cmd == "a":
-            return 1
+            log(1)
         elif cmd == "b":
-            return 2
+            log(2)
         elif cmd == "c":
-            return 3
+            log(3)
         elif cmd == "d":
-            return 4
+            log(4)
+        for z in others:
+            if z.ok:
+                for w in z.kids:
+                    if w:
+                        emit(w)
+        while rest:
+            if rest.ok:
+                for q in rest.kids:
+                    if q:
+                        emit(q)
     """)
     assert len(suggestions) == 3
     reductions = [s.estimated_reduction for s in suggestions]
@@ -337,24 +377,85 @@ def f(cmd):
 """
 
 
-def test_elif_dispatch_reduction_equals_arm_count():
-    # _FOUR_ARM_ELIF has 4 elif arms; _dispatch_reduction returns arms (4).
-    # The formula is: reduction == number of elif arms, not number of branches.
-    [dispatch] = [s for s in _suggest(_FOUR_ARM_ELIF) if s.kind == "split_dispatcher"]
-    assert dispatch.estimated_reduction == 4  # 4 elif arms, not 3 or 5
+def test_elif_dispatch_reduction_is_the_ladder_points():
+    # The ladder's payoff is what it actually costs per the breakdown (the `if`
+    # plus one point per `elif` arm), never a raw count of AST arms.
+    funcdef = ast.parse(_FOUR_ARM_ELIF.strip()).body[0]
+    breakdown = get_cognitive_complexity_breakdown(funcdef)
+    total = sum(c.points for c in breakdown)
+    [dispatch] = [s for s in suggest_refactors(funcdef, breakdown) if s.kind == "split_dispatcher"]
+    ladder_points = sum(
+        c.points for c in breakdown if dispatch.line_start <= c.lineno <= dispatch.line_end
+    )
+    assert dispatch.estimated_reduction == ladder_points
+    assert dispatch.estimated_complexity_after == total - dispatch.estimated_reduction
 
 
-def test_match_dispatch_reduction_is_cases_minus_one():
-    # _FOUR_CASE_MATCH has 4 cases; _dispatch_reduction returns cases - 1 = 3.
-    [dispatch] = [s for s in _suggest(_FOUR_CASE_MATCH) if s.kind == "split_dispatcher"]
-    assert dispatch.estimated_reduction == 3  # 4 cases - 1, not 4 or 2
+def test_flat_match_dispatch_is_below_the_noise_floor():
+    # The scorer charges a `match` +1 in total however many cases it has, so a
+    # flat 4-case match cannot be worth MIN_REDUCTION points — nothing is offered.
+    assert "split_dispatcher" not in _kinds(_suggest(_FOUR_CASE_MATCH))
 
 
-def test_estimated_complexity_after_clamped_at_zero():
-    # _FOUR_CASE_MATCH total complexity == 1 (one match contribution).
-    # dispatch reduction == 3, which exceeds total, so max(0, 1-3) must be 0.
-    [dispatch] = [s for s in _suggest(_FOUR_CASE_MATCH) if s.kind == "split_dispatcher"]
-    assert dispatch.estimated_complexity_after == 0  # clamp: never negative
+def test_overlapping_suggestions_share_one_reduction_budget():
+    # Every estimate is computed against the untouched total, so suggestions that
+    # cover the same lines cannot all be applied — their claims used to sum past
+    # the function's own complexity.
+    src = """
+    def f(a, b, items):
+        if a:
+            if b:
+                for i in items:
+                    if i > 0:
+                        for j in i:
+                            if j:
+                                print(j)
+    """
+    funcdef = ast.parse(src.strip()).body[0]
+    breakdown = get_cognitive_complexity_breakdown(funcdef)
+    total = sum(c.points for c in breakdown)
+    suggestions = suggest_refactors(funcdef, breakdown)
+    assert sum(s.estimated_reduction for s in suggestions) <= total
+
+
+def test_guard_and_merge_on_the_same_shell_are_not_both_offered():
+    # Inverting `if a:` into an early return and merging it into `if a and b:` are
+    # mutually exclusive rewrites of one `if a: if b:` shell; only the bigger win
+    # is reported.
+    kinds = _kinds(
+        _suggest("""
+    def f(a, b, items):
+        for x in items:
+            for y in x:
+                if a:
+                    if b:
+                        for z in y:
+                            if z:
+                                print(z)
+    """)
+    )
+    assert not {"guard_clause", "merge_nested_if"} <= kinds
+
+
+def test_recursive_function_is_not_told_to_extract_its_whole_body():
+    # The recursion point is charged to the `def` line, outside every body span —
+    # the fallback must still not propose extracting the entire body (a rename).
+    src = """
+    def walk(n, acc):
+        if n <= 0:
+            return acc
+        for c in n.kids:
+            if c.ok:
+                acc += 1
+        while acc > 100:
+            acc -= walk(n.parent, acc)
+        return acc if acc else walk(n.next, 0)
+    """
+    funcdef = ast.parse(src.strip()).body[0]
+    body = funcdef.body
+    whole_body = (body[0].lineno, body[-1].end_lineno)
+    suggestions = suggest_refactors(funcdef, get_cognitive_complexity_breakdown(funcdef))
+    assert all((s.line_start, s.line_end) != whole_body for s in suggestions)
 
 
 def test_complex_structural_match_does_not_suggest_dispatcher():
@@ -540,19 +641,20 @@ def test_merge_nested_if_not_suggested_when_inner_has_else():
 
 def test_match_with_or_patterns_is_still_a_dispatcher():
     # `case "a" | "b"` is a simple OR of value patterns, so the match still reads
-    # as a value dispatch and the suggestion stands.
+    # as a value dispatch and the suggestion stands (nested, to clear the floor).
     assert "split_dispatcher" in _kinds(
         _suggest("""
-    def f(cmd):
-        match cmd:
-            case "a" | "b":
-                return 1
-            case "c":
-                return 2
-            case "d":
-                return 3
-            case "e":
-                return 4
+    def f(cmds):
+        for cmd in cmds:
+            match cmd:
+                case "a" | "b":
+                    return 1
+                case "c":
+                    return 2
+                case "d":
+                    return 3
+                case "e":
+                    return 4
     """)
     )
 

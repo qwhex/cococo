@@ -4,8 +4,9 @@ import textwrap
 
 import pytest
 
-from cognitive_complexity.api import get_cognitive_complexity
+from cognitive_complexity.api import get_cognitive_complexity, get_cognitive_complexity_breakdown
 from cognitive_complexity.autofix import atomic_write, fix_source
+from cognitive_complexity.detectors import suggest_refactors
 
 
 def _score(src: str) -> int:
@@ -142,6 +143,52 @@ def test_does_not_touch_multi_line_condition():
     after, count = fix_source(before)
     assert count == 0
     assert after == before
+
+
+# Every reason the rewriter has to decline a guard, except tab indentation — the one
+# refusal the detector cannot see (it never gets the source text), reported by `--fix`
+# instead (see tests/test_cli.py::test_fix_explains_a_guard_it_refuses_on_tab_indentation).
+REFUSED_GUARDS = {
+    "not the last statement": (
+        "def f(x, items):\n"
+        "    if x:\n"
+        "        for i in items:\n"
+        "            if i:\n"
+        "                go(i)\n"
+        "    cleanup()\n"
+    ),
+    "multi-line test": (
+        "def f(a, b, items):\n"
+        "    if (a and\n"
+        "            b):\n"
+        "        for i in items:\n"
+        "            if i:\n"
+        "                go(i)\n"
+    ),
+    "multi-line string in the body": (
+        "def f(x, items):\n"
+        "    if x:\n"
+        '        msg = """\n'
+        "        keep this indented line\n"
+        '        """\n'
+        "        for i in items:\n"
+        "            if i:\n"
+        "                go(i, msg)\n"
+    ),
+}
+
+
+@pytest.mark.parametrize("src", REFUSED_GUARDS.values(), ids=list(REFUSED_GUARDS))
+def test_no_fix_badge_on_guards_the_rewriter_refuses(src):
+    """The `[--fix]` promise and the rewriter share one predicate, so they cannot disagree.
+
+    A suggestion advertising `--fix` that `fix_source` then declines leaves the user
+    with "applied 0 fix(es)" and no way to reach a fixed point.
+    """
+    funcdef = ast.parse(src).body[0]
+    suggestions = suggest_refactors(funcdef, get_cognitive_complexity_breakdown(funcdef))
+    assert fix_source(src)[1] == 0
+    assert [s.kind for s in suggestions if s.autofixable] == []
 
 
 def test_behavior_is_preserved_across_inputs():
@@ -354,6 +401,15 @@ def test_atomic_write_replaces_content_and_preserves_mode(tmp_path):
     assert target.read_text() == "new\n"
     assert (target.stat().st_mode & 0o777) == 0o750
     assert list(tmp_path.glob("*.tmp")) == []  # no temp left behind
+
+
+def test_atomic_write_creates_a_missing_destination(tmp_path):
+    # Also the create-new path (cococo's own state files), where there is no
+    # existing mode to copy.
+    target = tmp_path / "state.json"
+    atomic_write(target, "{}\n")
+    assert target.read_text() == "{}\n"
+    assert list(tmp_path.glob("*.tmp")) == []
 
 
 def test_atomic_write_keeps_original_and_cleans_temp_on_failure(tmp_path, monkeypatch):

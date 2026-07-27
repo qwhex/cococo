@@ -60,11 +60,19 @@ def suggest_refactors(funcdef: AnyFuncdef, breakdown: list[Contribution]) -> lis
 
 
 def _select(candidates: list[Suggestion]) -> list[Suggestion]:
+    """The biggest win per hotspot, biggest first, capped at ``MAX_SUGGESTIONS``.
+
+    Overlapping suggestions describe the same hotspot whatever their kind: each
+    estimate is measured against the untouched total, so they don't add up, and some
+    are mutually exclusive (inverting an ``if`` into a guard clause destroys the
+    ``if a: if b:`` shell a merge would need). Keeping one per span keeps the
+    report's arithmetic satisfiable and spends the slots on distinct places.
+    """
     good = [c for c in candidates if c.estimated_reduction >= MIN_REDUCTION]
     good.sort(key=lambda c: (-c.estimated_reduction, c.line_start))
     out: list[Suggestion] = []
     for candidate in good:
-        if any(_contains(s, candidate) for s in out):
+        if any(_overlaps(s, candidate) for s in out):
             continue
         out.append(candidate)
         if len(out) == MAX_SUGGESTIONS:
@@ -72,9 +80,5 @@ def _select(candidates: list[Suggestion]) -> list[Suggestion]:
     return out
 
 
-def _contains(outer: Suggestion, inner: Suggestion) -> bool:
-    return (
-        outer.kind == inner.kind
-        and outer.line_start <= inner.line_start
-        and outer.line_end >= inner.line_end
-    )
+def _overlaps(one: Suggestion, other: Suggestion) -> bool:
+    return one.line_start <= other.line_end and other.line_start <= one.line_end

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 
+from cognitive_complexity.autofix import flattenable_guard_ids
 from cognitive_complexity.detectors.base import (
     DetectorContext,
     Suggestion,
@@ -12,6 +13,9 @@ from cognitive_complexity.detectors.base import (
 
 KIND = "guard_clause"
 TITLE = "Flatten nested block with a guard clause"
+# The kind has a rewriter, but only the guards `--fix` would actually apply carry the
+# claim: `flattenable_guard_ids` is the rewriter's own precondition, so a suggestion
+# never advertises a fix that `fix_source` then refuses.
 AUTOFIXABLE = True
 STEPS = (
     "Invert the condition and return/continue early when it fails.",
@@ -21,6 +25,7 @@ STEPS = (
 
 
 def detect(ctx: DetectorContext) -> list[Suggestion]:
+    fixable = flattenable_guard_ids(ctx.funcdef, ctx.regions)
     out: list[Suggestion] = []
     for node in ctx.regions:
         if not isinstance(node, ast.If) or node.orelse or not node.body:
@@ -38,7 +43,7 @@ def detect(ctx: DetectorContext) -> list[Suggestion]:
                     kind=KIND,
                     title=TITLE,
                     steps=STEPS,
-                    autofixable=AUTOFIXABLE,
+                    autofixable=AUTOFIXABLE and id(node) in fixable,
                     start=node.lineno,
                     end=end,
                     reduction=saved,
