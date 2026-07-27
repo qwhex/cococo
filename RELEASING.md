@@ -16,8 +16,11 @@ minor/patch.
 
 ## Steps
 
+0. **Prerequisite: `mdl`** (`gem install mdl`). `just check` skips the README lint
+   when the gem is missing — and the README is the PyPI landing page — so `just
+   release` refuses to start without it.
 1. On `master` with all feature work committed, confirm `just check` is green
-   (format, lint, mypy strict, complexity, tests at 100% coverage).
+   (format, lint, mypy strict, complexity, tests at 100% coverage, README lint).
 2. **Draft the changelog** for the range since the last release: `just changelog-draft`
    (uses the last tag → HEAD). For the first release, which has no tag, pass an
    explicit base ref: `just changelog-draft <commit>`. It prints the

@@ -2,7 +2,8 @@ kind = "guard_clause"
 entry = "find_admin"
 expected_min_reduction = 1
 detect = false
+forbidden_kind = "guard_clause"
 autofixable = false
 behavior = ["find_admin([]) is None", "find_admin([type('U', (), {'role': 'user'})()] ) is None", "getattr(find_admin([type('U', (), {'role': 'admin'})()] ), 'role', None)"]
 source = "EX-A2-7 (for/else where loop exits via return, not break -> drop cosmetic else)"
-notes = "deliberate boundary: flatten_else_after_return handles if/else, not for/else. This for/else drop is a distinct low-value micro-case (bad=4, good=3), left as reduction-only data."
+notes = "deliberate boundary: flatten_else_after_return handles if/else, not for/else. This for/else drop is a distinct low-value micro-case (bad=4, good=3), so instead of asserting detection the case asserts the suppression (`forbidden_kind = guard_clause`) — it must stay out of the output until the boundary is deliberately moved."

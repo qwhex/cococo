@@ -1,6 +1,7 @@
 kind = "split_dispatcher"
 entry = "handle_state"
 expected_min_reduction = 4
-detect = false
+detect = true
+known_gap = true
 source = "catalog EX-A5-9"
-notes = "elif ladder keyed on enum members; engine does not detect non-literal keys; reduction validated only"
+notes = "elif ladder keyed on enum members. Engine gap: sequential_dispatch only recognises literal keys, so detection XFAILs — clear known_gap when it learns enum members."

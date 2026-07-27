@@ -11,24 +11,36 @@ expand as new suggestion kinds land:
 
   reduction  (positive) — the entry function's score drops by >= expected_min_reduction,
                           and no function in good.py exceeds the bad entry score
-  detection  (positive) — suggest_refactors(bad entry) emits `kind`  (only when `detect`)
+  detection  (positive) — suggest_refactors(bad entry) emits `kind`; graded unless the
+                          case sets ``detect = false``
   behavior   (positive) — every `behavior` expr evaluates equal in bad.py and good.py
-  precision  (negative) — suggest_refactors(bad entry) stays silent / omits `forbidden_kind`
+  precision  (any)      — ``forbidden_kind`` is absent from the suggestions and, when
+                          ``silent``, nothing at all is emitted (the two compose)
+  fix_claim  (any)      — implicit, never opted into: if any suggestion claims
+                          ``autofixable``, ``fix_source`` must apply at least one fix
 
-A case marked ``known_gap`` documents a current engine limitation: its failing axes
-are reported as XFAIL and do not fail the gate (flip the flag when the gap is fixed).
+Every positive case must say something about the engine: either it asserts detection,
+or it opts out with ``detect = false`` *and* names the ``forbidden_kind`` it expects to
+stay suppressed (e.g. a delta below MIN_REDUCTION). A case marked ``known_gap``
+documents a current engine limitation: its failing axes are reported as XFAIL and do
+not fail the gate — and a ``known_gap`` case with nothing left failing fails loudly, so
+the flag cannot outlive the gap.
 """
 
 from __future__ import annotations
 
 import ast
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
-try:
+from cognitive_complexity.common_types import AnyFuncdef, is_funcdef
+
+# tomllib is stdlib from 3.11; tomli is the 3.10 backport (see requirements_dev.txt).
+# Whichever interpreter runs, one of these branches is dead — hence a pragma on each.
+if sys.version_info >= (3, 11):  # pragma: no cover
     import tomllib
-except ModuleNotFoundError:  # Python 3.10
+else:  # pragma: no cover
     import tomli as tomllib
 
 from cognitive_complexity.api import (
@@ -36,12 +48,13 @@ from cognitive_complexity.api import (
     get_cognitive_complexity_breakdown,
 )
 from cognitive_complexity.autofix import fix_source
-from cognitive_complexity.common_types import is_funcdef
-from cognitive_complexity.detectors import suggest_refactors
+from cognitive_complexity.detectors import Suggestion, suggest_refactors
 
 REFACTORS_DIR = Path(__file__).parent / "refactors"
 
-PASS, FAIL, SKIP, XFAIL = "PASS", "FAIL", "SKIP", "XFAIL"
+PASS, FAIL, XFAIL = "PASS", "FAIL", "XFAIL"
+
+Axes = dict[str, tuple[str, str]]
 
 
 @dataclass(frozen=True)
@@ -53,8 +66,8 @@ class Case:
     negative: bool = False
     autofixable: bool = False
     expected_min_reduction: int = 1
-    detect: bool = False
-    silent: bool = True
+    detect: bool = True
+    silent: bool = False
     forbidden_kind: str | None = None
     known_gap: bool = False
     behavior: tuple[str, ...] = ()
@@ -65,7 +78,7 @@ class Case:
 @dataclass
 class CaseResult:
     case: Case
-    axes: dict[str, tuple[str, str]] = field(default_factory=dict)
+    axes: Axes = field(default_factory=dict)
 
     @property
     def failed(self) -> bool:
@@ -83,40 +96,57 @@ def load_cases(root: Path = REFACTORS_DIR) -> list[Case]:
     return cases
 
 
-def _funcs(src: str) -> dict[str, ast.AST]:
+def _funcs(src: str) -> dict[str, AnyFuncdef]:
     return {n.name: n for n in ast.walk(ast.parse(src)) if is_funcdef(n)}
 
 
-def _score(funcdef: ast.AST) -> int:
+def _score(funcdef: AnyFuncdef) -> int:
     return get_cognitive_complexity(funcdef)
 
 
 def grade_case(case: Case) -> CaseResult:
-    result = CaseResult(case)
     bad_src = (case.dir / "bad.py").read_text(encoding="utf-8")
-    bad_funcs = _funcs(bad_src)
-    bad_entry = bad_funcs[case.entry]
+    bad_entry = _funcs(bad_src)[case.entry]
 
     if case.negative:
-        result.axes["precision"] = _grade_precision(case, bad_entry)
+        axes: Axes = {"precision": _grade_precision(case, bad_entry)}
     else:
-        good_src = (case.dir / "good.py").read_text(encoding="utf-8")
-        result.axes["reduction"] = _grade_reduction(case, bad_entry, good_src)
-        if case.detect:
-            result.axes["detection"] = _grade_detection(case, bad_entry)
-        if case.autofixable:
-            result.axes["autofix"] = _grade_autofix(case, bad_src)
-        if case.behavior:
-            result.axes["behavior"] = _grade_behavior(case, bad_src, good_src)
+        axes = _grade_positive(case, bad_entry, bad_src)
+    axes["fix_claim"] = _grade_fix_claim(bad_entry, bad_src)
 
-    if case.known_gap:
-        for axis, (status, detail) in result.axes.items():
-            if status == FAIL:
-                result.axes[axis] = (XFAIL, f"known gap: {detail}")
-    return result
+    return CaseResult(case, _apply_known_gap(axes) if case.known_gap else axes)
 
 
-def _grade_reduction(case: Case, bad_entry: ast.AST, good_src: str) -> tuple[str, str]:
+def _grade_positive(case: Case, bad_entry: AnyFuncdef, bad_src: str) -> Axes:
+    good_src = (case.dir / "good.py").read_text(encoding="utf-8")
+    axes: Axes = {"reduction": _grade_reduction(case, bad_entry, good_src)}
+    if case.detect:
+        axes["detection"] = _grade_detection(case, bad_entry)
+    if case.silent or case.forbidden_kind is not None:
+        axes["precision"] = _grade_precision(case, bad_entry)
+    if case.autofixable:
+        axes["autofix"] = _grade_autofix(case, bad_src)
+    if case.behavior:
+        axes["behavior"] = _grade_behavior(case, bad_src, good_src)
+    return axes
+
+
+def _apply_known_gap(axes: Axes) -> Axes:
+    """Report the documented gap instead of failing on it — and expire the flag.
+
+    A ``known_gap`` case whose axes all pass has outlived its gap; saying so as a
+    FAIL is the strict-xfail equivalent (nothing else would ever prompt the flip).
+    """
+    graded: Axes = {
+        axis: (XFAIL, f"known gap: {detail}") if status == FAIL else (status, detail)
+        for axis, (status, detail) in axes.items()
+    }
+    if not any(status == XFAIL for status, _ in graded.values()):
+        graded["known_gap"] = (FAIL, "known_gap set but every axis passes — clear the flag")
+    return graded
+
+
+def _grade_reduction(case: Case, bad_entry: AnyFuncdef, good_src: str) -> tuple[str, str]:
     bad_score = _score(bad_entry)
     good_funcs = _funcs(good_src)
     if case.entry not in good_funcs:
@@ -132,9 +162,12 @@ def _grade_reduction(case: Case, bad_entry: ast.AST, good_src: str) -> tuple[str
     return PASS, detail
 
 
-def _grade_detection(case: Case, bad_entry: ast.AST) -> tuple[str, str]:
-    suggestions = suggest_refactors(bad_entry, get_cognitive_complexity_breakdown(bad_entry))
-    kinds = [s.kind for s in suggestions]
+def _suggest(bad_entry: AnyFuncdef) -> list[Suggestion]:
+    return suggest_refactors(bad_entry, get_cognitive_complexity_breakdown(bad_entry))
+
+
+def _grade_detection(case: Case, bad_entry: AnyFuncdef) -> tuple[str, str]:
+    kinds = [s.kind for s in _suggest(bad_entry)]
     if case.kind in kinds:
         return PASS, f"emitted {case.kind}"
     return FAIL, f"expected {case.kind}, got {kinds or 'nothing'}"
@@ -152,9 +185,27 @@ def _grade_autofix(case: Case, bad_src: str) -> tuple[str, str]:
     return (PASS if delta >= case.expected_min_reduction else FAIL), detail
 
 
-def _grade_precision(case: Case, bad_entry: ast.AST) -> tuple[str, str]:
-    suggestions = suggest_refactors(bad_entry, get_cognitive_complexity_breakdown(bad_entry))
-    kinds = [s.kind for s in suggestions]
+def _grade_fix_claim(bad_entry: AnyFuncdef, bad_src: str) -> tuple[str, str]:
+    """The converse of the opt-in ``autofix`` axis, asserted on every case.
+
+    ``autofix`` grades cases that *should* be rewritten; this one grades the promise
+    itself, so a ``[--fix]`` badge the rewriter declines cannot hide in a case that
+    never opted in. It is why no case has to remember to ask for it.
+    """
+    claimed = sorted({s.kind for s in _suggest(bad_entry) if s.autofixable})
+    if not claimed:
+        return PASS, "no autofixable claim"
+    _fixed, count = fix_source(bad_src)
+    if count:
+        return PASS, f"{claimed} honoured by --fix ({count} guard(s))"
+    return FAIL, f"{claimed} claimed autofixable but --fix applied nothing"
+
+
+def _grade_precision(case: Case, bad_entry: AnyFuncdef) -> tuple[str, str]:
+    """``silent`` and ``forbidden_kind`` are independent, and both are checked."""
+    kinds = [s.kind for s in _suggest(bad_entry)]
+    if case.silent and kinds:
+        return FAIL, f"expected total silence, emitted {kinds}"
     if case.forbidden_kind is not None:
         if case.forbidden_kind in kinds:
             return FAIL, f"{case.forbidden_kind} wrongly emitted (got {kinds})"
@@ -165,8 +216,8 @@ def _grade_precision(case: Case, bad_entry: ast.AST) -> tuple[str, str]:
 
 
 def _grade_behavior(case: Case, bad_src: str, good_src: str) -> tuple[str, str]:
-    bad_ns: dict[str, Any] = {}
-    good_ns: dict[str, Any] = {}
+    bad_ns: dict[str, object] = {}
+    good_ns: dict[str, object] = {}
     exec(compile(bad_src, "<bad>", "exec"), bad_ns)  # noqa: S102 - eval set runs trusted local code
     exec(compile(good_src, "<good>", "exec"), good_ns)  # noqa: S102
     for expr in case.behavior:
@@ -193,7 +244,7 @@ def main() -> int:
     n_fail = 0
     for r in results:
         for axis, (status, detail) in r.axes.items():
-            mark = {PASS: "ok ", FAIL: "XX ", SKIP: "-- ", XFAIL: "xf "}[status]
+            mark = {PASS: "ok ", FAIL: "XX ", XFAIL: "xf "}[status]
             print(f"  {mark}{status:5s} {r.case.id:{width}s}  {axis:9s}  {detail}")
         if r.failed:
             n_fail += 1
@@ -201,5 +252,5 @@ def main() -> int:
     return 1 if n_fail else 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())

@@ -1,11 +1,12 @@
 kind = "extract_helper"
 entry = "fetch_with_retry"
 expected_min_reduction = 7
-detect = false
+detect = true
+known_gap = true
 source = "brainstorm EX-A1-5"
 notes = """\
 Retry wrapper with per-attempt try/except + status branching. \
-Reduction-only: the engine does not detect `extract_helper` here because \
+Engine gap (detection XFAILs): the engine does not detect `extract_helper` here because \
 the loop body contains `return` and `raise` statements that cross the \
 extraction boundary, so `_is_extractable_region` returns False. \
 The good.py manually applies the extraction via a sentinel-value pattern \

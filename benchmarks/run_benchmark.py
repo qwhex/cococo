@@ -38,18 +38,35 @@ import statistics
 import subprocess
 import time
 from collections import defaultdict
+from collections.abc import Callable
 from datetime import datetime
+from functools import partial
 from pathlib import Path
+from typing import TypedDict
 
 from cognitive_complexity.api import (
     get_cognitive_complexity,
     get_cognitive_complexity_breakdown,
 )
-from cognitive_complexity.common_types import is_funcdef
+from cognitive_complexity.common_types import AnyFuncdef, is_funcdef
 from cognitive_complexity.detectors import suggest_refactors
 
 
-def _build_large_function(depth: int, breadth: int) -> ast.AST:
+class SuggestSummary(TypedDict):
+    """One `suggest` measurement pass — also the JSONL log record (see `_append_log`)."""
+
+    corpus_n: int
+    score_median_us: float
+    suggest_median_us: float
+    suggest_p95_us: float
+    suggest_p99_us: float
+    suggest_max_us: float
+    full_pass_us: float
+    overhead_ratio: float
+    by_kind_median_us: dict[str, float]
+
+
+def _build_large_function(depth: int, breadth: int) -> AnyFuncdef:
     """Generate a deeply nested + wide function for the compute benchmark."""
     lines = ["def big(a, b, c, d):"]
     indent = "    "
@@ -58,14 +75,16 @@ def _build_large_function(depth: int, breadth: int) -> ast.AST:
         lines.append(f"{pad}if a and b or c and d:  # nesting {level}")
     pad = indent * (depth + 1)
     lines.extend(f"{pad}x{i} = a if b else c" for i in range(breadth))
-    return ast.parse("\n".join(lines)).body[0]
+    funcdef = ast.parse("\n".join(lines)).body[0]
+    assert is_funcdef(funcdef)
+    return funcdef
 
 
-def _count_nodes(funcdef: ast.AST) -> int:
+def _count_nodes(funcdef: AnyFuncdef) -> int:
     return sum(1 for _ in ast.walk(funcdef))
 
 
-def run_compute_once(funcdef: ast.AST, repeats: int) -> float:
+def run_compute_once(funcdef: AnyFuncdef, repeats: int) -> float:
     """Time ``repeats`` scorings of one funcdef in-process; return seconds."""
     start = time.perf_counter()
     for _ in range(repeats):
@@ -73,7 +92,7 @@ def run_compute_once(funcdef: ast.AST, repeats: int) -> float:
     return time.perf_counter() - start
 
 
-def _sample(funcdef: ast.AST, repeats: int, runs: int, warmup: int) -> list[float]:
+def _sample(funcdef: AnyFuncdef, repeats: int, runs: int, warmup: int) -> list[float]:
     """Per-scoring seconds across ``runs`` timed samples (after ``warmup``)."""
     for _ in range(warmup):
         run_compute_once(funcdef, repeats)
@@ -133,7 +152,7 @@ def run_sweep(sizes: list[int], depth: int, repeats: int, runs: int, warmup: int
     )
 
 
-def _load_corpus() -> list[tuple[str, str, ast.AST]]:
+def _load_corpus() -> list[tuple[str, str, AnyFuncdef]]:
     """The eval ``bad.py`` entry functions + their kind, as the benchmark workload.
 
     Reads ``evals/refactors/*/case.toml`` (kind + entry) and the matching
@@ -142,7 +161,7 @@ def _load_corpus() -> list[tuple[str, str, ast.AST]]:
     """
     from evals.refactor_eval import load_cases
 
-    corpus: list[tuple[str, str, ast.AST]] = []
+    corpus: list[tuple[str, str, AnyFuncdef]] = []
     for case in load_cases():
         funcs = {
             n.name: n
@@ -155,13 +174,13 @@ def _load_corpus() -> list[tuple[str, str, ast.AST]]:
     return corpus
 
 
-def _per_call(work: object, repeats: int, runs: int, warmup: int) -> float:
+def _per_call(work: Callable[[], object], repeats: int, runs: int, warmup: int) -> float:
     """Median per-call seconds for ``work`` (a no-arg callable), after warmup."""
 
     def once() -> float:
         start = time.perf_counter()
         for _ in range(repeats):
-            work()  # type: ignore[operator]
+            work()
         return (time.perf_counter() - start) / repeats
 
     for _ in range(warmup):
@@ -169,22 +188,19 @@ def _per_call(work: object, repeats: int, runs: int, warmup: int) -> float:
     return statistics.median(once() for _ in range(runs))
 
 
-def measure_suggest(repeats: int, runs: int, warmup: int) -> dict[str, object]:
+def measure_suggest(repeats: int, runs: int, warmup: int) -> SuggestSummary | None:
     """One full measurement pass over the eval corpus; returns summary metrics (us)."""
     corpus = _load_corpus()
     if not corpus:
-        return {}
+        return None
     score_s: list[float] = []
     suggest_s: list[float] = []
     by_kind: dict[str, list[float]] = defaultdict(list)
     for _case_id, kind, funcdef in corpus:
         breakdown = get_cognitive_complexity_breakdown(funcdef)
-        score_s.append(
-            _per_call(
-                lambda f=funcdef: get_cognitive_complexity_breakdown(f), repeats, runs, warmup
-            )
-        )
-        s = _per_call(lambda f=funcdef, b=breakdown: suggest_refactors(f, b), repeats, runs, warmup)
+        score = partial(get_cognitive_complexity_breakdown, funcdef)
+        score_s.append(_per_call(score, repeats, runs, warmup))
+        s = _per_call(partial(suggest_refactors, funcdef, breakdown), repeats, runs, warmup)
         suggest_s.append(s)
         by_kind[kind].append(s)
     score_med = statistics.median(score_s)
@@ -212,7 +228,7 @@ def _git_commit() -> str:
         return "unknown"
 
 
-def _append_log(path: Path, summary: dict[str, object], repeats: int, runs: int) -> None:
+def _append_log(path: Path, summary: SuggestSummary, repeats: int, runs: int) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     entry = {
         "ts": datetime.now().isoformat(timespec="seconds"),
@@ -237,10 +253,10 @@ def _stat_line(label: str, values: list[float], unit: str) -> None:
 
 def run_suggest(repeats: int, runs: int, warmup: int, trials: int, log_path: Path) -> None:
     """Run the suggest measurement ``trials`` times; log each and report stability."""
-    summaries: list[dict[str, object]] = []
+    summaries: list[SuggestSummary] = []
     for t in range(trials):
         summary = measure_suggest(repeats, runs, warmup)
-        if not summary:
+        if summary is None:
             print("no eval corpus found under evals/refactors/ — nothing to benchmark")
             return
         summaries.append(summary)
@@ -256,13 +272,11 @@ def run_suggest(repeats: int, runs: int, warmup: int, trials: int, log_path: Pat
         f"\nSuggestion overhead over {last['corpus_n']} eval functions, "
         f"{trials} trial(s) ({repeats} calls/run x {runs}):"
     )
-    _stat_line("overhead ratio", [float(s["overhead_ratio"]) for s in summaries], "x")
-    _stat_line("suggest median", [float(s["suggest_median_us"]) for s in summaries], "us")
-    _stat_line("suggest p95", [float(s["suggest_p95_us"]) for s in summaries], "us")
-    by_kind = last["by_kind_median_us"]
-    assert isinstance(by_kind, dict)
+    _stat_line("overhead ratio", [s["overhead_ratio"] for s in summaries], "x")
+    _stat_line("suggest median", [s["suggest_median_us"] for s in summaries], "us")
+    _stat_line("suggest p95", [s["suggest_p95_us"] for s in summaries], "us")
     print("\n  per kind (median per fn, last trial):")
-    for kind, value in by_kind.items():
+    for kind, value in last["by_kind_median_us"].items():
         print(f"    {kind:18s}  {value:8.2f}us")
     print(f"\n  appended {trials} trial(s) to {log_path}")
 

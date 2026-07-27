@@ -1,3 +1,12 @@
+# Every hand-written module in the repo. The gates below (typecheck, complexity) all
+# take this one list, so a new top-level module cannot land outside them by omission.
+# evals/refactors/ is excluded on purpose: those fixtures are deliberately-smelly data,
+# not code (ruff excludes them too, see pyproject.toml).
+sources := "cognitive_complexity evals/refactor_eval.py evals/__init__.py benchmarks/run_benchmark.py"
+
+# Use the project venv from any shell (no-op where .venv doesn't exist, e.g. CI).
+export PATH := justfile_directory() + "/.venv/bin:" + env_var("PATH")
+
 # The single gate, run by CI (.github/workflows/ci.yml) and the pre-push hook (`just install-hooks`).
 check: format-check lint typecheck complexity test check-readme
 
@@ -9,7 +18,7 @@ lint:
 complexity:
     # Tighten --max (or refactor) rather than loosen it: no function should get
     # harder to read than today's worst.
-    python -m cognitive_complexity.cli cognitive_complexity --max 10
+    python -m cognitive_complexity.cli {{sources}} --max 10
 
 # Reformat with ruff
 format:
@@ -19,29 +28,35 @@ format:
 format-check:
     ruff format --check .
 
-# Type-check the package with mypy (strict)
+# Type-check every hand-written module with mypy (strict)
 typecheck:
-    mypy cognitive_complexity
+    mypy {{sources}}
 
-# Run the test suite with coverage (enforces the 100% floor)
+# Run the test suite with coverage (enforces the 100% floor).
+# Scope: the shipped package + the eval grader that gates the corpus. benchmarks/ is a
+# manual perf harness whose output nothing gates on, so it is a *declared* coverage
+# exemption (see pyproject.toml [tool.coverage.run]) — it is still held to ruff, mypy
+# strict and the complexity ceiling above.
 test:
-    python -m pytest --cov=cognitive_complexity --cov-report=xml --cov-fail-under=100
+    python -m pytest --cov=cognitive_complexity --cov=evals --cov-report=xml --cov-fail-under=100
 
 # Run the refactor-suggestion eval set with the per-axis table (the gate runs it
 # via the pytest test in `test`; this recipe is the human-readable view).
 eval:
     python -m evals.refactor_eval
 
-# Lint the README (mdl, a Ruby gem). Required in CI; optional locally.
+# Lint the README (mdl, a Ruby gem). Required in CI and for `just release`; optional
+# for day-to-day work, but a skipped run says so loudly — a green `check` without mdl
+# is NOT the gate CI runs.
 check-readme:
     #!/usr/bin/env bash
     set -euo pipefail
-    # Skip with a warning if mdl isn't installed locally rather than hard-fail the
-    # gate; CI installs it and enforces it. When present, its exit code propagates.
     if command -v mdl >/dev/null 2>&1; then
         mdl README.md
     else
-        echo "mdl not installed — skipping README lint (CI enforces it)"
+        echo "WARNING: mdl not installed — README lint SKIPPED." >&2
+        echo "WARNING: this run is NOT the full CI gate. Install it with 'gem install mdl'" >&2
+        echo "WARNING: (required by 'just release'; CI enforces it on every push)." >&2
     fi
 
 # Install git hooks: pre-push runs `just check`, the same gate as CI
@@ -85,6 +100,9 @@ release dry="":
     dirty=$(git status --porcelain --untracked-files=no \
         | grep -vE ' (cognitive_complexity/__init__\.py|CHANGELOG\.md)$' || true)
     [ -z "$dirty" ] || { echo "uncommitted changes outside version/changelog:"; echo "$dirty"; exit 1; }
+    # The release path is where "linter unavailable" must not mean "linter passed":
+    # `just check` skips the README lint without mdl, and the README is the PyPI page.
+    command -v mdl >/dev/null 2>&1 || { echo "mdl not installed — required to cut a release (the README is the PyPI landing page). Install with 'gem install mdl'."; exit 1; }
     version=$(python -c "import cognitive_complexity as c; print(c.__version__)")
     grep -qF "## [$version]" CHANGELOG.md || { echo "no '## [$version]' section in CHANGELOG.md"; exit 1; }
     git rev-parse "v$version" >/dev/null 2>&1 && { echo "tag v$version already exists"; exit 1; } || true

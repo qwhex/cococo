@@ -16,6 +16,11 @@ build-backend = "setuptools.build_meta"
 # via the `test` recipe in the justfile.
 testpaths = ["tests"]
 
+[tool.coverage.run]
+# The eval fixtures are data (read as text, exec'd from a string by the behavior axis),
+# never imported — listing them keeps a stray import from silently widening the floor.
+omit = ["evals/refactors/*"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"
@@ -65,10 +70,13 @@ max-complexity = 20
 # Type checking configuration — strict, mirrored from cosmetix data_pipeline.
 python_version = "3.10"
 
-# Exclude test files from type checking
+# Exclude test files from type checking, and the eval fixtures — they are deliberately
+# broken sample code (and every case dir holds a `bad.py`, which mypy reads as duplicate
+# modules), so they are data, not a type-checked surface. Ruff excludes them too.
 exclude = [
     "test_.*\\.py$",
     "conftest\\.py$",
+    "^evals/refactors/",
 ]
 
 # Core strict settings for return type annotations
@@ -92,3 +100,10 @@ disallow_any_generics = true
 disallow_subclassing_any = false
 disallow_untyped_calls = false
 disallow_untyped_decorators = false
+
+# tomli is the Python 3.10 backport of tomllib (requirements_dev.txt installs it only
+# there), so it is absent from the environment on 3.11+ where mypy still reads the
+# else-branch under python_version = "3.10".
+[[tool.mypy.overrides]]
+module = ["tomli"]
+ignore_missing_imports = true

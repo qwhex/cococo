@@ -1,5 +1,8 @@
 #!/bin/sh
-# Runs the exact gate CI runs (.github/workflows/ci.yml -> `just check`).
+# Runs `just check` — the gate CI runs (.github/workflows/ci.yml).
+# One caveat: without the `mdl` gem the README lint is skipped locally (the recipe
+# says so loudly on stderr), so a green run here equals the CI gate only when mdl is
+# installed. `just release` refuses to run without it.
 # Enable with `just install-hooks`.
 # Bypass a single push with `git push --no-verify`.
 exec just check
