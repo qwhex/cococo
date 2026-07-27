@@ -17,7 +17,7 @@ Properties at a glance
 8. test_try_except_handlers_add_at_least_one— each except contributes ≥ 1 point
 9. test_bool_op_nodes_contribute_per_node   — N flat bool-op nodes contribute N points
 10. test_ternary_contributes_with_nesting   — ternary scores ≥ 1 and nesting raises it
-11. test_all_omitted_constructs_exercised   — random generation covers else/elif/try/match/ternary
+11. test_each_construct_scores_its_documented_points — one exact score per construct kind
 """
 
 from __future__ import annotations
@@ -38,8 +38,6 @@ from cognitive_complexity.api import (
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
-
-_SUPPRESS_HEALTH = settings(suppress_health_check=list(__import__("hypothesis").HealthCheck))
 
 
 def _parse_func(src: str) -> ast.FunctionDef:
@@ -399,34 +397,38 @@ def test_ternary_contributes_with_nesting(outer_ifs: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Property 11: all previously-omitted constructs are reachable by the generator
+# Property 11: each construct kind scores its exact documented cost
 # ---------------------------------------------------------------------------
 
-# This is not a property per se but a generation sanity check: confirm that
-# the _multi_snippet_func strategy can produce functions containing each of the
-# constructs that the old property test generator never created. We run the
-# scorer over a hand-constructed minimal example of each and assert the score
-# is > 0 (the construct was noticed).
+# One minimal snippet per construct in the _CONTROL_SNIPPET grammar, with the
+# score hand-derived from Campbell's rules (a construct at nesting 0 costs +1;
+# else/elif add +1 with no nesting surcharge; a match costs +1 whatever the
+# number of cases). Pins the cost of every kind the other properties only
+# constrain by inequality.
 
 
-def test_omitted_constructs_score_nonzero() -> None:
-    """Smoke-test that every previously-omitted construct scores > 0."""
-    cases: list[tuple[str, str]] = [
-        ("else", "def f(a):\n    if a:\n        x = 1\n    else:\n        x = 2"),
-        ("elif", "def f(a, b):\n    if a:\n        x = 1\n    elif b:\n        x = 2"),
-        ("bool-op", "def f(a, b):\n    x = a and b"),
-        ("try/except", "def f():\n    try:\n        x = 1\n    except ValueError:\n        x = 2"),
+def test_each_construct_scores_its_documented_points() -> None:
+    cases: list[tuple[str, str, int]] = [
+        ("if/else", "def f(a):\n    if a:\n        x = 1\n    else:\n        x = 2", 2),
+        ("if/elif", "def f(a, b):\n    if a:\n        x = 1\n    elif b:\n        x = 2", 2),
+        ("bool-op", "def f(a, b):\n    x = a and b", 1),
+        (
+            "try/except",
+            "def f():\n    try:\n        x = 1\n    except ValueError:\n        x = 2",
+            1,
+        ),
         (
             "match",
             "def f(a):\n    match a:\n        case 1:\n            x = 1\n        case _:\n            x = 0",
+            1,
         ),
-        ("ternary", "def f(a, b):\n    x = a if a else b"),
-        ("for-else", "def f(r):\n    for i in r:\n        x = i\n    else:\n        x = 0"),
-        ("while-else", "def f(a):\n    while a:\n        x = 1\n    else:\n        x = 0"),
+        ("ternary", "def f(a, b):\n    x = a if a else b", 1),
+        ("comprehension-if", "def f(r):\n    x = [i for i in r if i > 0]", 1),
+        ("for/else", "def f(r):\n    for i in r:\n        x = i\n    else:\n        x = 0", 2),
+        ("while/else", "def f(a):\n    while a:\n        x = 1\n    else:\n        x = 0", 2),
     ]
-    for label, src in cases:
-        score = _score(src)
-        assert score > 0, f"Construct '{label}' produced score 0 — it was not noticed:\n{src}"
+    for label, src, expected in cases:
+        assert _score(src) == expected, f"'{label}' should score {expected}:\n{src}"
 
 
 # ---------------------------------------------------------------------------

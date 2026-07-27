@@ -5,7 +5,17 @@ async loops, match/case, the decorator/closure heuristic, method recursion,
 and comprehension filters.
 """
 
+import ast
+import textwrap
+
 from conftest import get_code_snippet_complexity
+
+from cognitive_complexity.api import get_cognitive_complexity
+
+
+def _funcdef(src):
+    return ast.parse(textwrap.dedent(src).strip()).body[0]
+
 
 # --------------------------------------------------------------------------
 # Loops: async for counts like for
@@ -121,6 +131,23 @@ def test_factory_returning_constant_also_excludes_inner():
     )
 
 
+def test_fold_mode_factory_scores_the_same_with_and_without_a_docstring():
+    # In fold mode a factory is scored as the inner function it returns. Adding a
+    # docstring is a doc-only edit and must not change the score.
+    factory = """
+    def deco(fn):
+        def inner(*a):
+            for x in a:      # +1
+                if x:        # +2
+                    x -= 1
+            return fn
+        return inner
+    """
+    documented = factory.replace("def deco(fn):", 'def deco(fn):\n        """Doc."""')
+    assert get_cognitive_complexity(_funcdef(factory), fold_nested=True) == 3
+    assert get_cognitive_complexity(_funcdef(documented), fold_nested=True) == 3
+
+
 def test_closure_factory_own_score_excludes_inner():
     # A value-returning closure factory: `make_adder`'s own score is 0, and
     # `add` is scored separately on its own merits.
@@ -175,6 +202,54 @@ def test_outer_name_called_only_inside_nested_def_is_not_outer_recursion():
         return g
     """)
         == 0
+    )
+
+
+def test_recursion_inside_a_bool_operand_is_found_in_both_nesting_modes():
+    # A self-call hidden in a boolean operand is still recursion, and the two
+    # nesting modes must agree on it — the same source always scores the same.
+    fd = _funcdef("""
+    def walk(node, depth):
+        return depth > 0 and walk(node, depth - 1)   # bool-op +1, recursion +1
+    """)
+    assert get_cognitive_complexity(fd) == 2
+    assert get_cognitive_complexity(fd, fold_nested=True) == 2
+
+
+# --------------------------------------------------------------------------
+# Boolean operands are walked: constructs inside them are scored
+# --------------------------------------------------------------------------
+
+
+def test_ternary_inside_a_bool_operand_is_scored():
+    assert (
+        get_code_snippet_complexity("""
+    def f(a, b, c, d):
+        return a and (b if c else d)   # bool-op +1, ternary +1
+    """)
+        == 2
+    )
+
+
+def test_comprehension_filters_inside_a_bool_operand_are_scored():
+    assert (
+        get_code_snippet_complexity("""
+    def f(flag, xs):
+        return flag and [x for x in xs if x > 0 if x < 9]   # bool-op +1, filters +2
+    """)
+        == 3
+    )
+
+
+def test_bool_op_inside_a_lambda_operand_scores_at_the_lambda_nesting():
+    # The lambda adds a nesting level, so the `if` in its body costs +2 — it is
+    # scored even though the lambda sits inside a boolean operand.
+    assert (
+        get_code_snippet_complexity("""
+    def f(a, y, z):
+        return a and (lambda w: 1 if w else 0)   # bool-op +1, ternary +2 (in lambda)
+    """)
+        == 3
     )
 
 

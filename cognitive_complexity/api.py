@@ -6,6 +6,7 @@ from cognitive_complexity.utils.ast import (
     call_targets_name,
     decorator_inner,
     describe_node,
+    flatten_bool_op,
     has_recursive_calls,
     process_node_itself,
 )
@@ -24,6 +25,10 @@ class Contribution(NamedTuple):
     structural cost is ``points - nesting``. For ``elif``/``else``, bool-ops and
     comprehension filters ``nesting`` is only ambient context
     (``nesting_counted`` false) and all of ``points`` is structural.
+
+    The AST has no node for an ``else:`` keyword, so an ``else`` contribution
+    (from ``if``/``for``/``while`` alike) reports the line just after the branch
+    above it — exact unless a comment or blank line sits in the gap.
     """
 
     lineno: int
@@ -79,6 +84,22 @@ def _mark_recursion(node: ast.AST, rec_name: str | None, rec_found: list[bool]) 
         rec_found[0] = True
 
 
+def _else_lineno(body: list[ast.stmt]) -> int:
+    """The ``else:`` line, taken as the line after the branch it follows."""
+    last = body[-1]
+    return (last.end_lineno or last.lineno) + 1
+
+
+def _collect_loop_else(node: ast.AST, nesting: int, out: list[Contribution]) -> None:
+    """A ``for``/``while`` ``else`` scores +1 like an if-else, on its own entry.
+
+    The AST hangs it off the loop node, so the generic walk would otherwise fold
+    its point into the loop's contribution and label it as part of the loop.
+    """
+    if isinstance(node, (ast.For, ast.AsyncFor, ast.While)) and node.orelse:
+        out.append(Contribution(_else_lineno(node.body), "else", 1, nesting, False))
+
+
 def _collect_breakdown(
     node: ast.AST,
     increment_by: int,
@@ -107,6 +128,13 @@ def _collect_breakdown(
         )
         return
 
+    # A boolean condition scores as one construct spanning its whole operator
+    # tree, and its operands still have to be walked — the uniform child walk
+    # would instead re-score each nested `and`/`or` as a separate entry.
+    if isinstance(node, ast.BoolOp):
+        _collect_bool_op_breakdown(node, increment_by, out, fold_nested, rec_name, rec_found)
+        return
+
     nesting_before = increment_by
     increment_by, base_complexity, should_iter_children = process_node_itself(
         node, increment_by, fold_nested
@@ -115,22 +143,55 @@ def _collect_breakdown(
     # back to the nearest ancestor that did.
     lineno = getattr(node, "lineno", parent_lineno)
 
-    if base_complexity:
-        # Control-flow breakers bumped ``increment_by`` for their own body, so
-        # the level they sit at is the pre-bump value and their nesting penalty
-        # is baked into base_complexity. Bool-ops / comprehension filters don't
-        # bump, so they sit at the ambient level with no nesting penalty.
-        nesting_counted = increment_by != nesting_before
-        node_nesting = increment_by - 1 if nesting_counted else nesting_before
-        out.append(
-            Contribution(
-                lineno, describe_node(node), base_complexity, node_nesting, nesting_counted
-            )
-        )
+    _append_node_contribution(node, lineno, base_complexity, nesting_before, increment_by, out)
+    _collect_loop_else(node, nesting_before, out)
 
     if should_iter_children:
         for child in ast.iter_child_nodes(node):
             _collect_breakdown(child, increment_by, lineno, out, fold_nested, rec_name, rec_found)
+
+
+def _append_node_contribution(
+    node: ast.AST,
+    lineno: int,
+    points: int,
+    nesting_before: int,
+    increment_by: int,
+    out: list[Contribution],
+) -> None:
+    """Record what ``node`` alone scored, at the nesting level it sits at.
+
+    A control-flow breaker bumped ``increment_by`` for its own body, so the level
+    it sits at is the pre-bump value and its nesting penalty is baked into
+    ``points``. A comprehension filter doesn't bump, so it sits at the ambient
+    level with no nesting penalty.
+    """
+    if not points:
+        return
+    nesting_counted = increment_by != nesting_before
+    node_nesting = increment_by - 1 if nesting_counted else nesting_before
+    out.append(Contribution(lineno, describe_node(node), points, node_nesting, nesting_counted))
+
+
+def _collect_bool_op_breakdown(
+    node: ast.BoolOp,
+    increment_by: int,
+    out: list[Contribution],
+    fold_nested: bool,
+    rec_name: str | None,
+    rec_found: list[bool],
+) -> None:
+    """+1 per sequence of like logical operators, reported on the condition's line.
+
+    Boolean operands carry no nesting penalty of their own, so the whole tree is
+    one entry at the ambient level; everything else in the operands is walked.
+    """
+    points, operands = flatten_bool_op(node)
+    out.append(Contribution(node.lineno, describe_node(node), points, increment_by, False))
+    for operand in operands:
+        _collect_breakdown(
+            operand, increment_by, node.lineno, out, fold_nested, rec_name, rec_found
+        )
 
 
 def _collect_if_breakdown(
@@ -169,6 +230,6 @@ def _collect_if_breakdown(
         )
     elif orelse:
         # `else`: +1, no nesting penalty; its body is scored one level deeper.
-        out.append(Contribution(orelse[0].lineno, "else", 1, increment_by, False))
+        out.append(Contribution(_else_lineno(node.body), "else", 1, increment_by, False))
         for stmt in orelse:
             _collect_breakdown(stmt, body_level, node.lineno, out, fold_nested, rec_name, rec_found)

@@ -157,6 +157,66 @@ def test_breakdown_bool_op_has_no_nesting_penalty():
     assert boolop.nesting_counted is False
 
 
+def test_breakdown_reports_a_compound_condition_as_one_bool_op():
+    # Three sequences of like operators (`and`, `and`, `or`), all at the same
+    # nesting level in one condition: one entry worth 3, not three of 1.
+    fd = _funcdef("""
+    def f(a, b, c, d):
+        if (a and b) or (c and d):
+            return 1
+    """)
+    breakdown = get_cognitive_complexity_breakdown(fd)
+    assert [(c.lineno, c.label, c.points) for c in breakdown] == [
+        (2, "if", 1),
+        (2, "bool-op", 3),
+    ]
+
+
+def test_breakdown_scores_each_bool_op_node_at_its_own_nesting():
+    # The `or` lives inside a lambda, one nesting level below the outer `and`.
+    # Each ast.BoolOp is one entry worth 1 point, attributed where it sits.
+    fd = _funcdef("""
+    def f(a, y, z):
+        return a and (lambda: y or z)
+    """)
+    breakdown = get_cognitive_complexity_breakdown(fd)
+    assert [(c.label, c.points, c.nesting) for c in breakdown] == [
+        ("bool-op", 1, 0),
+        ("bool-op", 1, 1),
+    ]
+
+
+def test_breakdown_else_reports_the_else_keyword_line():
+    fd = _funcdef("""
+    def g(a):
+        if a:
+            x = 1
+        else:
+            x = 2
+        return x
+    """)
+    [else_c] = [c for c in get_cognitive_complexity_breakdown(fd) if c.label == "else"]
+    assert (else_c.lineno, else_c.points) == (4, 1)  # line 4 is `else:`, not line 5
+
+
+def test_breakdown_gives_loop_else_its_own_contribution():
+    # A `for ... else` used to report a single `for` worth 2 points, hiding the
+    # else's +1 behind the loop's label and line.
+    fd = _funcdef("""
+    def loops(xs):
+        for x in xs:
+            pass
+        else:
+            pass
+    """)
+    breakdown = get_cognitive_complexity_breakdown(fd)
+    assert [(c.lineno, c.label, c.points) for c in breakdown] == [
+        (2, "for", 1),
+        (4, "else", 1),
+    ]
+    assert sum(c.points for c in breakdown) == get_cognitive_complexity(fd) == 2
+
+
 def test_breakdown_excludes_nested_defs_from_the_parent():
     # Named nested defs are not folded into the enclosing function's breakdown:
     # `a_decorator`'s own breakdown is empty (define inner, return inner), and
@@ -296,7 +356,7 @@ def test_explain_bare_single_function_file(tmp_path, capsys):
 def test_explain_bare_multi_function_file_errors(tmp_path, capsys):
     # KLASS has two functions; the bare form must refuse and name them.
     p = _write(tmp_path, "m.py", KLASS)
-    assert main(["--explain", str(p)]) == 1
+    assert main(["--explain", str(p)]) == 2
     err = capsys.readouterr().err
     assert "Klass.method" in err and "solo" in err
 
@@ -309,19 +369,21 @@ def test_explain_flat_function_reports_no_constructs(tmp_path, capsys):
     assert "flat function" in out
 
 
-# ---- CLI explain: malformed input → clean stderr, nonzero exit -----------
+# ---- CLI explain: malformed input → clean stderr, exit 2 (setup failure) ---
+# 1 stays reserved for "a function is over the ceiling", so a script driving
+# cococo can tell a real violation from a target it could not resolve.
 
 
 def test_explain_missing_function_exits_nonzero(tmp_path, capsys):
     p = _write(tmp_path, "m.py", KLASS)
-    assert explain(f"{p}::missing") == 1
+    assert explain(f"{p}::missing") == 2
     err = capsys.readouterr().err
     assert "missing" in err
     assert err.startswith("cococo:")
 
 
 def test_explain_file_not_found(capsys):
-    assert main(["--explain", "/no/such/file.py::f"]) == 1
+    assert main(["--explain", "/no/such/file.py::f"]) == 2
     err = capsys.readouterr().err
     assert err.startswith("cococo:")
     assert "Traceback" not in err
@@ -329,7 +391,7 @@ def test_explain_file_not_found(capsys):
 
 def test_explain_syntax_error_file(tmp_path, capsys):
     p = _write(tmp_path, "bad.py", "def f(:\n    pass\n")
-    assert main(["--explain", f"{p}::f"]) == 1
+    assert main(["--explain", f"{p}::f"]) == 2
     err = capsys.readouterr().err
     assert err.startswith("cococo:")
     assert "syntax" in err.lower()
@@ -340,7 +402,7 @@ def test_explain_non_integer_line(tmp_path, capsys):
     # `FILE.py:notanumber` isn't a line selector; it falls through to a bare
     # path that doesn't exist — still a clean nonzero exit, not a traceback.
     p = _write(tmp_path, "ok.py", "def f():\n    return 1\n")
-    assert main(["--explain", f"{p}:notanumber"]) == 1
+    assert main(["--explain", f"{p}:notanumber"]) == 2
     err = capsys.readouterr().err
     assert err.startswith("cococo:")
     assert "Traceback" not in err
@@ -349,7 +411,7 @@ def test_explain_non_integer_line(tmp_path, capsys):
 def test_explain_empty_qualname(tmp_path, capsys):
     # `FILE.py::` parses to an empty qualname that matches nothing.
     p = _write(tmp_path, "ok.py", "def f():\n    return 1\n")
-    assert main(["--explain", f"{p}::"]) == 1
+    assert main(["--explain", f"{p}::"]) == 2
     err = capsys.readouterr().err
     assert err.startswith("cococo:")
     assert "Traceback" not in err
@@ -357,7 +419,7 @@ def test_explain_empty_qualname(tmp_path, capsys):
 
 def test_explain_file_without_functions_exits_nonzero(tmp_path, capsys):
     p = _write(tmp_path, "novars.py", "VALUE = 1\n")
-    assert main(["--explain", str(p)]) == 1
+    assert main(["--explain", str(p)]) == 2
     err = capsys.readouterr().err
     assert err.startswith("cococo:")
     assert "no functions found" in err
@@ -366,7 +428,7 @@ def test_explain_file_without_functions_exits_nonzero(tmp_path, capsys):
 def test_explain_wrong_line_number_exits_nonzero(tmp_path, capsys):
     # `FILE.py:LINE` pointing at a line with no function definition.
     p = _write(tmp_path, "m.py", "def f():\n    return 1\n")
-    assert main(["--explain", f"{p}:99"]) == 1
+    assert main(["--explain", f"{p}:99"]) == 2
     err = capsys.readouterr().err
     assert err.startswith("cococo:")
     assert "line 99" in err

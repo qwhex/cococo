@@ -29,12 +29,24 @@ def decorator_inner(funcdef: AnyFuncdef) -> AnyFuncdef | None:
     the node — rather than a bool — lets callers use the narrowed inner directly,
     so they need not re-index and re-type ``funcdef.body[0]``.
     """
-    if len(funcdef.body) != 2:
+    body = _without_docstring(funcdef.body)
+    if len(body) != 2:
         return None
-    inner = funcdef.body[0]
-    if is_funcdef(inner) and _returns_name(funcdef.body[1], inner.name):
+    inner = body[0]
+    if is_funcdef(inner) and _returns_name(body[1], inner.name):
         return inner
     return None
+
+
+def _without_docstring(body: list[ast.stmt]) -> list[ast.stmt]:
+    """``body`` minus a leading docstring, so documenting a function can't reshape it."""
+    first = body[0]  # a funcdef body is never empty
+    is_docstring = (
+        isinstance(first, ast.Expr)
+        and isinstance(first.value, ast.Constant)
+        and isinstance(first.value.value, str)
+    )
+    return body[1:] if is_docstring else body
 
 
 def _walk_own_scope(funcdef: AnyFuncdef) -> Iterator[ast.AST]:
@@ -99,34 +111,42 @@ def describe_node(node: ast.AST, *, is_elif_arm: bool = False) -> str:
     return type(node).__name__
 
 
-def process_control_flow_breaker(
-    node: ast.For | ast.AsyncFor | ast.While | ast.IfExp | ast.ExceptHandler | ast.Match,
-    increment_by: int,
-) -> tuple[int, int, bool]:
-    # `ast.If` is handled by api._collect_if_breakdown, not here, so that
-    # if/elif/else chains can score body and orelse at different nesting levels.
-    if isinstance(node, ast.IfExp):
-        # C if A else B; ternary operator equivalent
-        increment = 0
-        increment_by += 1
-    elif isinstance(node, ast.ExceptHandler):
-        # +1 for the catch/except-handler
-        increment = 0
-        increment_by += 1
-    elif isinstance(node, ast.Match):
-        # a match/switch is a single structural increment plus a nesting level,
-        # regardless of the number of cases (Sonar treats switch as one branch)
-        increment = 0
-        increment_by += 1
-    elif node.orelse:
-        # +1 for the else and add a nesting level
-        increment = 1
-        increment_by += 1
-    else:
-        # no 'else' to count, just add a nesting level
-        increment = 0
-        increment_by += 1
-    return increment_by, max(1, increment_by) + increment, True
+def process_control_flow_breaker(increment_by: int) -> tuple[int, int, bool]:
+    """A ternary/loop/except/match: +1 plus the nesting penalty, and it opens a level.
+
+    A match/switch is a single structural increment regardless of the number of
+    cases (Sonar treats a switch as one branch). A loop's ``else`` is scored
+    separately by ``api._collect_loop_else`` so it gets its own breakdown entry.
+    ``ast.If`` never reaches here: ``api._collect_if_breakdown`` handles it, so
+    that if/elif/else chains can score body and orelse at different levels.
+    """
+    increment_by += 1
+    return increment_by, increment_by, True
+
+
+def flatten_bool_op(node: ast.BoolOp) -> tuple[int, list[ast.AST]]:
+    """The boolean expression at ``node``: how many ``BoolOp``s, and its operands.
+
+    ``and``/``or``/``not`` chain into one condition at one nesting level, so the
+    expression scores as a single construct worth +1 per sequence of like
+    operators (Campbell B1) — ``(a and b) or (c and d)`` is 3, and a ``not`` is
+    transparent rather than a boundary. The returned operands are everything
+    else, in source order; they still need walking, since an operand can hold a
+    ternary, a comprehension, a lambda or a recursive call.
+    """
+    count = 0
+    operands: list[ast.AST] = []
+    stack: list[ast.AST] = [node]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, ast.BoolOp):
+            count += 1
+            stack.extend(reversed(current.values))
+        elif isinstance(current, ast.UnaryOp) and isinstance(current.op, ast.Not):
+            stack.append(current.operand)
+        else:
+            operands.append(current)
+    return count, operands
 
 
 def process_node_itself(
@@ -134,7 +154,8 @@ def process_node_itself(
     increment_by: int,
     fold_nested: bool = False,
 ) -> tuple[int, int, bool]:
-    # `ast.If` is intercepted by api._collect_if_breakdown before reaching here.
+    # `ast.If` and `ast.BoolOp` are intercepted by api._collect_if_breakdown /
+    # api._collect_bool_op_breakdown before reaching here.
     control_flow_breakers = (
         ast.For,
         ast.AsyncFor,
@@ -151,14 +172,10 @@ def process_node_itself(
     )
 
     if isinstance(node, control_flow_breakers):
-        return process_control_flow_breaker(node, increment_by)
+        return process_control_flow_breaker(increment_by)
     elif isinstance(node, incrementers_nodes):
         increment_by += 1
         return increment_by, 0, True
-    elif isinstance(node, ast.BoolOp):
-        inner_boolops_amount = len([n for n in ast.walk(node) if isinstance(n, ast.BoolOp)])
-        base_complexity = inner_boolops_amount
-        return increment_by, base_complexity, False
     elif isinstance(node, ast.comprehension):
         # each filter condition in a comprehension is a decision point
         return increment_by, len(node.ifs), True
