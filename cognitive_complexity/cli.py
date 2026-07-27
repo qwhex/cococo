@@ -15,12 +15,15 @@ Usage::
     cococo src/ --max 20 --json  # machine-readable report for a pipeline
     cococo src/ --fix            # apply safe guard-clause rewrites in place
     cococo src/ --nested fold    # pre-2.0.0 scoring (fold nested defs into parent)
+    cococo . --exclude 'generated/*'      # prune more paths from the walk
     cococo src/ --max 20 --baseline .cococo.json   # ratchet: fail only on regressions
     cococo --explain a.py::Klass.method   # break down one function
     cococo --explain a.py:42              # ...by line number
 
 Exit codes in gate mode: 0 = within ceiling, 1 = offenders found, 2 = the gate
 could not be trusted (nothing scanned, a file skipped, or a --fix write failed).
+1 is only ever "too complex": every other failure, ``--explain``'s included,
+exits 2.
 A function can suppress itself from the gate with a ``# cococo: ignore`` comment
 on its ``def`` line.
 """
@@ -30,13 +33,21 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 from cognitive_complexity.api import Contribution, get_cognitive_complexity_breakdown
-from cognitive_complexity.autofix import atomic_write, fix_source
+from cognitive_complexity.autofix import atomic_write, fix_source, refused_guards
 from cognitive_complexity.common_types import AnyFuncdef, ScoredFunction, SkippedFile
 from cognitive_complexity.detectors import Suggestion, suggest_refactors
-from cognitive_complexity.discovery import find_function, iter_python_files, parse_target, scan
+from cognitive_complexity.discovery import (
+    detect_encoding,
+    find_function,
+    iter_python_files,
+    parse_target,
+    read_source,
+    scan,
+)
 from cognitive_complexity.report import build_report, func_key, is_over, to_json
 
 
@@ -72,8 +83,11 @@ def explain(target: str, fold_nested: bool = False) -> int:
     try:
         funcdef, qual = find_function(path, qualname, lineno, fold_nested)
     except (LookupError, OSError, UnicodeDecodeError, SyntaxError, RecursionError) as exc:
+        # Every one of these is "fix the setup" (missing file, unknown qualname,
+        # unparseable source), never "the code is too complex" — so 2, not the
+        # gate's 1, and a caller branching on the exit code can tell them apart.
         print(f"cococo: {exc}", file=sys.stderr)
-        return 1
+        return 2
     breakdown = get_cognitive_complexity_breakdown(funcdef, fold_nested)
     print(_format_breakdown(funcdef, qual, path, breakdown))
     return 0
@@ -130,6 +144,14 @@ def main(argv: list[str] | None = None) -> int:
         "into the enclosing function (pre-2.0.0 compatibility)",
     )
     parser.add_argument(
+        "--exclude",
+        action="append",
+        metavar="PATTERN",
+        default=None,
+        help="skip paths matching this glob while walking directories (repeatable); "
+        "on top of the always-excluded hidden/virtualenv/vendor/build trees",
+    )
+    parser.add_argument(
         "--baseline",
         metavar="FILE",
         default=None,
@@ -148,11 +170,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.baseline is not None and args.max is None:
         parser.error("--baseline requires --max (the ceiling for code not in the baseline)")
 
-    fix_failures = _apply_fixes(args.paths) if args.fix else 0
+    exclude = tuple(args.exclude or ())
+    fix_failures = _apply_fixes(args.paths, exclude) if args.fix else 0
 
-    functions, skipped, scanned = scan(args.paths, fold_nested)
+    functions, skipped, scanned = scan(args.paths, fold_nested, exclude)
     try:
-        baseline, baseline_root = _baseline_for_scan(args.baseline, functions, skipped)
+        baseline, baseline_root = _baseline_for_scan(
+            args.baseline, functions, skipped, fix_failures
+        )
     except BaselineError as exc:
         print(f"cococo: {exc}", file=sys.stderr)
         return 2
@@ -180,13 +205,20 @@ def _baseline_for_scan(
     raw_path: str | None,
     functions: list[ScoredFunction],
     skipped: list[SkippedFile],
+    fix_failures: int,
 ) -> tuple[dict[str, int] | None, Path | None]:
-    """Load/create the baseline only when the scan is trusted enough to do so."""
+    """Load/create the baseline only when the scan is trusted enough to do so.
+
+    Loading is always safe; *creating* records permanent ceilings, so it needs the
+    same trust ``main`` demands before returning 0 — nothing scanned, a skipped
+    file, or a ``--fix`` write that did not land all disqualify the run (the
+    recorded scores would be the pre-fix ones, grandfathered forever).
+    """
     if raw_path is None:
         return None, None
     path = Path(raw_path)
     root = path.parent
-    if not path.exists() and (not functions or skipped):
+    if not path.exists() and (not functions or skipped or fix_failures):
         return None, root
     return _load_or_create_baseline(path, functions), root
 
@@ -205,7 +237,9 @@ def _load_or_create_baseline(path: Path, functions: list[ScoredFunction]) -> dic
         return _validate_baseline(path, loaded)
     baseline = {func_key(f, path.parent): f.score for f in functions}
     try:
-        path.write_text(json.dumps(baseline, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        # Atomic: an interrupted create leaves no baseline at all, rather than a
+        # truncated one that fails every later run at exit 2.
+        atomic_write(path, json.dumps(baseline, indent=2, sort_keys=True) + "\n")
     except OSError as exc:
         raise BaselineError(f"invalid baseline {path}: {exc}") from exc
     print(f"cococo: wrote baseline for {len(baseline)} function(s) to {path}", file=sys.stderr)
@@ -285,7 +319,7 @@ def _shown(functions: list[ScoredFunction], max_: int | None, min_: int) -> list
     )
 
 
-def _apply_fixes(paths: list[str]) -> int:
+def _apply_fixes(paths: list[str], exclude: Sequence[str] = ()) -> int:
     """Rewrite safe guard-clause patterns in place; return the write-failure count.
 
     Each changed file is written atomically (a crash can't truncate the
@@ -294,31 +328,64 @@ def _apply_fixes(paths: list[str]) -> int:
     stderr; the returned count lets the caller fail the exit code when a write
     did not land.
     """
-    changed = 0
-    applied = 0
-    failed = 0
-    for path in iter_python_files(paths):
-        try:
-            source = path.read_text(encoding="utf-8")
-            new_source, count = fix_source(source)
-        except (OSError, UnicodeDecodeError, SyntaxError, RecursionError):
-            continue
-        if not count:
-            continue
-        try:
-            atomic_write(path, new_source)
-        except OSError as exc:
-            print(f"cococo: FAILED to write {path}: {exc}", file=sys.stderr)
-            failed += 1
-            continue
-        print(f"cococo: fixed {path} ({count} guard(s))", file=sys.stderr)
-        changed += 1
-        applied += count
+    outcomes = [_fix_one_file(path) for path in iter_python_files(paths, exclude)]
+    applied = sum(count for count in outcomes if count)
+    changed = sum(1 for count in outcomes if count)
     print(
         f"cococo: applied {applied} guard-clause fix(es) across {changed} file(s)",
         file=sys.stderr,
     )
-    return failed
+    return sum(1 for count in outcomes if count is None)
+
+
+def _fix_one_file(path: Path) -> int | None:
+    """Rewrite one file: the guards applied, or ``None`` when the write did not land.
+
+    A symlink is skipped rather than rewritten — the replace would swap the link
+    for a regular file and silently detach it from the module it points at.
+
+    A guard the rewriter recognises but declines (tab indentation — the one refusal
+    the ``[--fix]`` badge cannot predict) is named on stderr, so "applied 0" always
+    has a reason attached.
+    """
+    if path.is_symlink():
+        print(f"cococo: skipped {path}: symlink (name its target to rewrite it)", file=sys.stderr)
+        return 0
+    try:
+        encoding = detect_encoding(path)
+        source = read_source(path, encoding)
+        new_source, count = fix_source(source)
+        refused = refused_guards(new_source)
+    except (OSError, UnicodeDecodeError, SyntaxError, RecursionError):
+        return 0
+    if refused:
+        print(
+            f"cococo: skipped {refused} guard(s) in {path}: tab-indented source "
+            "(--fix rewrites space-indented code only)",
+            file=sys.stderr,
+        )
+    if not count:
+        return 0
+    return _write_fix(path, source, new_source, encoding, count)
+
+
+def _write_fix(path: Path, source: str, new_source: str, encoding: str, count: int) -> int | None:
+    """Write the rewrite back, unless the file moved under us while we transformed it.
+
+    ``fix_source`` re-parses the module once per applied guard, so the read→write
+    window is long enough for an editor or formatter to save over it; writing the
+    stale rewrite would discard that edit with no error and no backup.
+    """
+    try:
+        if read_source(path, encoding) != source:
+            print(f"cococo: skipped {path}: changed during fix", file=sys.stderr)
+            return None
+        atomic_write(path, new_source, encoding)
+    except (OSError, UnicodeDecodeError) as exc:
+        print(f"cococo: FAILED to write {path}: {exc}", file=sys.stderr)
+        return None
+    print(f"cococo: fixed {path} ({count} guard(s))", file=sys.stderr)
+    return count
 
 
 def _report(

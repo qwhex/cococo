@@ -39,7 +39,16 @@ cococo src/ --max 20 --json  # machine-readable report for a pipeline
 cococo src/ --fix            # apply safe guard-clause rewrites in place
 cococo src/ --nested fold    # pre-2.0.0 scoring: fold nested defs into the parent
 cococo src/ --max 20 --baseline .cococo.json  # ratchet: fail only on regressions
+cococo . --exclude 'generated/*'   # skip extra paths on top of the defaults
 ```
+
+Scanning a directory walks it recursively, but never into hidden directories
+(`.git`, `.venv`, `.tox`, tool caches) or the usual vendor/build trees
+(`venv`, `site-packages`, `node_modules`, `build`, `dist`, `__pycache__`,
+`*.egg-info`), so `cococo .` scores your code rather than your dependencies —
+and `--fix` can never rewrite an installed package. `--exclude PATTERN`
+(repeatable) prunes more; a file named directly on the command line is always
+scanned, exclusions or not.
 
 `cococo` scores every function, method, and **named nested function** as its own
 unit — a nested `def` is reported on its own row with a qualified name
@@ -81,7 +90,13 @@ Suggestions tagged `[--fix]` can be applied automatically. `--fix` rewrites only
 transforms it can prove keep behavior identical (an `if` with no `else` that is
 the last statement of a function or loop body becomes an early
 `return`/`continue` guard, de-indenting its body); anything else is left
-untouched, and comments/formatting in the moved body are preserved.
+untouched, and comments/formatting in the moved body are preserved. The file is
+written back as itself — same encoding (a `coding:` declaration or a BOM is
+honored, not flattened to UTF-8) and same line endings, so a CRLF file does not
+come back as a whole-file diff. When in doubt `--fix` skips rather than writes:
+a symlinked `.py` is reported and left as a link (name its target to rewrite
+it), and a file that changed on disk while it was being transformed is skipped
+instead of overwritten with the stale rewrite.
 
 ### Adopting the gate incrementally
 
@@ -115,8 +130,14 @@ about:
   suggestions).
 - **2** — the gate could not be trusted: no functions were scanned (a typo'd or
   empty path), a file was skipped (unreadable, unparseable, or too deeply nested
-  to score), or a `--fix` write failed. A `2` means "fix the setup", not "code is
-  too complex".
+  to score), or a `--fix` write failed or was skipped as unsafe. A `2` means
+  "fix the setup", not "code is too complex".
+
+The same split holds outside the gate: `--explain` exits **2** when it cannot
+resolve its target (missing file, unknown qualname or line, unparseable source),
+never 1 — so `1` only ever means "over the ceiling". A run that exits 2 also
+never creates a `--baseline` file: the recorded ceilings would come from a scan
+the tool itself did not trust.
 
 ### JSON output
 

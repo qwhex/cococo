@@ -10,7 +10,8 @@ import ast
 import io
 import sys
 import tokenize
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
+from fnmatch import fnmatch
 from pathlib import Path
 
 from cognitive_complexity.api import get_cognitive_complexity_breakdown
@@ -18,14 +19,68 @@ from cognitive_complexity.common_types import AnyFuncdef, ScoredFunction, Skippe
 
 _IGNORE_DIRECTIVE = "cococo: ignore"
 
+# Directories a recursive scan never descends into. Hidden directories (a `.`
+# prefix) are pruned too, which covers .venv/.git/.tox/.nox/.eggs and the
+# assorted tool caches without naming each one.
+_EXCLUDED_DIRS = frozenset(
+    {"venv", "node_modules", "build", "dist", "__pycache__", "site-packages"}
+)
 
-def iter_python_files(paths: list[str]) -> Iterator[Path]:
+
+def iter_python_files(paths: list[str], exclude: Sequence[str] = ()) -> Iterator[Path]:
+    """Yield the ``.py`` files under ``paths``, worst-case a whole directory tree.
+
+    Recursion prunes virtualenv/vendor/build/cache trees (and anything matching an
+    ``exclude`` glob) *during* the walk, so a run at a repo root scores project
+    source rather than installed dependencies — and ``--fix`` cannot rewrite them.
+    A file named directly on the command line is always honoured: exclusions
+    apply to what the walk discovers, not to what the user asked for by name.
+    """
+    patterns = tuple(exclude)
     for raw in paths:
         path = Path(raw)
         if path.is_dir():
-            yield from sorted(path.rglob("*.py"))
+            yield from sorted(_walk_python_files(path, patterns))
         elif path.suffix == ".py":
             yield path
+
+
+def _walk_python_files(root: Path, patterns: tuple[str, ...]) -> Iterator[Path]:
+    stack = [root]
+    while stack:
+        files, subdirs = _split_entries(stack.pop(), patterns)
+        stack.extend(subdirs)
+        yield from files
+
+
+def _split_entries(directory: Path, patterns: tuple[str, ...]) -> tuple[list[Path], list[Path]]:
+    """Split one directory into ``(.py files to score, subdirectories to descend)``.
+
+    Symlinked directories are not followed — they can leave the scanned tree or
+    form a cycle — matching the traversal ``rglob`` did before exclusions existed.
+    """
+    files: list[Path] = []
+    subdirs: list[Path] = []
+    for entry in directory.iterdir():
+        if entry.is_dir():
+            if not entry.is_symlink() and not _is_excluded_dir(entry, patterns):
+                subdirs.append(entry)
+        elif entry.suffix == ".py" and not _matches(entry, patterns):
+            files.append(entry)
+    return files, subdirs
+
+
+def _is_excluded_dir(entry: Path, patterns: tuple[str, ...]) -> bool:
+    return (
+        entry.name.startswith(".")
+        or entry.name in _EXCLUDED_DIRS
+        or entry.name.endswith(".egg-info")
+        or _matches(entry, patterns)
+    )
+
+
+def _matches(entry: Path, patterns: tuple[str, ...]) -> bool:
+    return any(fnmatch(entry.name, p) or fnmatch(str(entry), p) for p in patterns)
 
 
 def _collect(
@@ -58,7 +113,7 @@ def _collect(
 
 
 def scan(
-    paths: list[str], fold_nested: bool = False
+    paths: list[str], fold_nested: bool = False, exclude: Sequence[str] = ()
 ) -> tuple[list[ScoredFunction], list[SkippedFile], int]:
     """Score every function under ``paths``; also return skipped files and scan count.
 
@@ -67,7 +122,7 @@ def scan(
     ``--max`` gate and the JSON report can expose coverage, rather than launder a
     partial scan as clean. ``files_scanned`` counts the files that parsed.
     """
-    files = list(iter_python_files(paths))
+    files = list(iter_python_files(paths, exclude))
     outcomes = [_score_or_skip(path, fold_nested) for path in files]
     results = [func for scored, _ in outcomes for func in scored]
     skipped = [info for _, info in outcomes if info is not None]
@@ -92,8 +147,30 @@ def _score_or_skip(
         return [], SkippedFile(path, reason)
 
 
+def detect_encoding(path: Path) -> str:
+    """The codec CPython itself would use for ``path`` (PEP 263 cookie, or BOM).
+
+    Raises ``SyntaxError`` for an unknown codec name, the same way the interpreter
+    rejects a bogus coding declaration.
+    """
+    with path.open("rb") as raw:
+        return tokenize.detect_encoding(raw.readline)[0]
+
+
+def read_source(path: Path, encoding: str | None = None) -> str:
+    """Read ``path`` the way CPython reads a module: its own codec, newlines verbatim.
+
+    ``utf-8-sig`` (a BOM file) decodes with the mark stripped, a ``coding:``
+    declaration is honoured, and ``newline=""`` keeps ``\\r\\n`` intact so a
+    rewrite touches only the lines it means to. Pass ``encoding`` to reuse an
+    already-detected codec (a re-read, or a write-back in the same codec).
+    """
+    with path.open(encoding=encoding or detect_encoding(path), newline="") as handle:
+        return handle.read()
+
+
 def _parse_file(path: Path) -> tuple[str, ast.Module]:
-    """Read ``path`` as UTF-8 and parse it, returning ``(source, tree)``.
+    """Read and parse ``path``, returning ``(source, tree)``.
 
     The single read+parse site shared by the scanner and ``--explain``; it raises
     ``OSError`` / ``UnicodeDecodeError`` / ``SyntaxError`` for the caller to map
@@ -101,7 +178,7 @@ def _parse_file(path: Path) -> tuple[str, ast.Module]:
     source text comes back too so the scanner can read ``# cococo: ignore``
     directives (comments are not in the AST).
     """
-    source = path.read_text(encoding="utf-8")
+    source = read_source(path)
     return source, ast.parse(source, filename=str(path))
 
 

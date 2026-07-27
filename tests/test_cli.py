@@ -593,6 +593,18 @@ def test_fix_rewrites_file_and_lowers_score(tmp_path, capsys):
     assert f"fixed {path}" in err  # per-file audit trail (ae65)
 
 
+def test_fix_explains_a_guard_it_refuses_on_tab_indentation(tmp_path, capsys):
+    # Tab indentation is the one refusal the detector cannot see (it never gets the
+    # source text), so `--fix` must name it rather than report a bare "applied 0".
+    tabbed = "def f(x, items):\n\tif x:\n\t\tfor i in items:\n\t\t\tif i:\n\t\t\t\tgo(i)\n"
+    path = _write(tmp_path, "m.py", tabbed)
+    assert main([str(path), "--fix", "--min", "0"]) == 0
+    err = capsys.readouterr().err
+    assert path.read_text() == tabbed
+    assert "applied 0 guard-clause fix(es)" in err
+    assert "tab-indented" in err
+
+
 def test_fix_then_gate_can_pass_after_rewrite(tmp_path):
     # A function that fails the gate, then passes once --fix flattens it.
     path = _write(tmp_path, "m.py", FIXABLE)
@@ -620,7 +632,7 @@ def test_fix_write_failure_is_reported_and_exits_nonzero(tmp_path, capsys, monke
 
     path = _write(tmp_path, "m.py", FIXABLE)
 
-    def boom(_path: object, _data: object) -> None:
+    def boom(*_args: object) -> None:
         raise OSError("disk full")
 
     monkeypatch.setattr(climod, "atomic_write", boom)
@@ -628,6 +640,173 @@ def test_fix_write_failure_is_reported_and_exits_nonzero(tmp_path, capsys, monke
     err = capsys.readouterr().err
     assert "FAILED to write" in err
     assert path.read_text() == FIXABLE  # original untouched
+
+
+# --- scope, encodings, and concurrent-write safety of --fix ---
+
+
+def test_fix_never_reaches_into_a_virtualenv(tmp_path, capsys):
+    # `cococo . --fix` at a repo root must not rewrite installed dependencies.
+    vendored = tmp_path / ".venv/lib/python3.12/site-packages"
+    vendored.mkdir(parents=True)
+    dep = vendored / "dep.py"
+    dep.write_text(FIXABLE)
+    mine = _write(tmp_path, "m.py", FIXABLE)
+
+    assert main([str(tmp_path), "--fix", "--min", "0"]) == 0
+
+    assert dep.read_text() == FIXABLE  # untouched
+    assert "if not x:" in mine.read_text()
+    assert "applied 1 guard-clause fix(es) across 1 file(s)" in capsys.readouterr().err
+
+
+def test_exclude_flag_keeps_matching_paths_out_of_the_scan(tmp_path, capsys):
+    generated = tmp_path / "generated"
+    generated.mkdir()
+    (generated / "big.py").write_text(NESTED)
+    _write(tmp_path, "m.py", NESTED)
+
+    assert main([str(tmp_path), "--max", "5", "--exclude", "generated"]) == 1
+
+    err = capsys.readouterr().err
+    assert "1 function(s) exceed" in err
+    assert "generated" not in err
+
+
+def test_fix_preserves_crlf_line_endings_through_the_cli(tmp_path):
+    # The in-memory fix_source test cannot see this: the CLI's read used to
+    # translate \r\n away, so a one-guard fix rewrote every line in the file.
+    path = tmp_path / "m.py"
+    path.write_bytes(FIXABLE.replace("\n", "\r\n").encode())
+
+    assert main([str(path), "--fix", "--min", "0"]) == 0
+
+    after = path.read_bytes()
+    assert b"if not x:\r\n" in after  # the rewritten header is CRLF too
+    assert b"\n" not in after.replace(b"\r\n", b"")  # no line in the file went bare-LF
+    assert b"handle(item)\r\n" in after  # the untouched body kept its endings
+
+
+def test_scan_reads_bom_and_declared_encodings_like_cpython(tmp_path, capsys):
+    # Both files compile fine under CPython; a hardcoded utf-8 read reported them
+    # as unparseable and pinned the gate at exit 2.
+    (tmp_path / "bom.py").write_bytes(b"\xef\xbb\xbf" + FLAT.encode())
+    (tmp_path / "latin.py").write_bytes(
+        ('# -*- coding: latin-1 -*-\ndef h():\n    return "caf\xe9"\n').encode("latin-1")
+    )
+
+    assert main([str(tmp_path), "--max", "5"]) == 0
+
+    assert "skipped" not in capsys.readouterr().err
+
+
+def test_fix_writes_back_in_the_files_own_encoding(tmp_path):
+    path = tmp_path / "m.py"
+    source = (
+        '# -*- coding: latin-1 -*-\ndef f(x, items):\n    label = "caf\xe9"\n'
+        "    if x:\n        for item in items:\n            if item.ok:\n                go(item)\n"
+    )
+    path.write_bytes(source.encode("latin-1"))
+
+    assert main([str(path), "--fix", "--min", "0"]) == 0
+
+    raw = path.read_bytes()
+    assert b"if not x:" in raw
+    assert raw.decode("latin-1").count("caf\xe9") == 1  # still latin-1, not re-encoded
+
+
+def test_fix_skips_a_file_that_changed_while_it_was_being_fixed(tmp_path, capsys, monkeypatch):
+    # The rewrite is derived from a stale read; writing it would silently discard
+    # whatever the concurrent writer saved.
+    import cognitive_complexity.cli as climod
+
+    path = _write(tmp_path, "m.py", FIXABLE)
+    real_fix_source = climod.fix_source
+
+    def racing(source: str) -> tuple[str, int]:
+        path.write_text(FIXABLE + "\n# saved by the editor\n")
+        return real_fix_source(source)
+
+    monkeypatch.setattr(climod, "fix_source", racing)
+
+    assert main([str(path), "--fix", "--min", "0"]) == 2
+
+    assert "changed during fix" in capsys.readouterr().err
+    assert "# saved by the editor" in path.read_text()  # the other write survived
+
+
+def test_fix_leaves_symlinked_sources_as_symlinks(tmp_path, capsys):
+    # Replacing the link with a regular file would silently detach it from the
+    # canonical module and the two copies would diverge from then on.
+    outside = tmp_path / "canonical"
+    outside.mkdir()
+    target = outside / "target.py"
+    target.write_text(FIXABLE)
+    scanned = tmp_path / "scanned"
+    scanned.mkdir()
+    link = scanned / "link.py"
+    link.symlink_to(target)
+
+    assert main([str(scanned), "--fix", "--min", "0"]) == 0
+
+    assert link.is_symlink()
+    assert target.read_text() == FIXABLE
+    assert "symlink" in capsys.readouterr().err
+
+
+# --- baseline durability and trust ---
+
+
+def test_baseline_creation_leaves_no_half_written_file(tmp_path, capsys, monkeypatch):
+    # An interrupted create must leave *no* baseline rather than a truncated one
+    # (a truncated baseline fails every later run at exit 2).
+    import os as osmod
+
+    _write(tmp_path, "m.py", NESTED)
+    bl = tmp_path / "baseline.json"
+
+    def boom(*_args: object) -> None:
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(osmod, "fsync", boom)
+
+    assert main([str(tmp_path), "--max", "5", "--baseline", str(bl)]) == 2
+
+    assert not bl.exists()
+    assert list(tmp_path.glob("*.tmp")) == []
+    assert "baseline" in capsys.readouterr().err.lower()
+
+
+def test_baseline_is_not_created_when_a_fix_write_failed(tmp_path, capsys, monkeypatch):
+    # The run exits 2 ("could not be trusted"); recording pre-fix scores as the
+    # permanent ratchet would grandfather exactly what --fix failed to clean up.
+    import cognitive_complexity.cli as climod
+
+    path = _write(tmp_path, "m.py", FIXABLE)
+    bl = tmp_path / "baseline.json"
+    real_atomic_write = climod.atomic_write
+
+    def refuse_sources(target: Path, data: str, *args: object) -> None:
+        if target == path:
+            raise OSError("read-only file system")
+        real_atomic_write(target, data, *args)
+
+    monkeypatch.setattr(climod, "atomic_write", refuse_sources)
+    assert main([str(tmp_path), "--max", "5", "--fix", "--baseline", str(bl)]) == 2
+
+    err = capsys.readouterr().err
+    assert "FAILED to write" in err
+    assert "wrote baseline" not in err
+    assert not bl.exists()
+
+
+def test_explain_setup_failures_are_untrusted_not_violations(tmp_path, capsys):
+    # 1 is reserved for "too complex"; a missing file or unknown qualname is a
+    # setup problem, so a script branching on the exit code can tell them apart.
+    p = _write(tmp_path, "m.py", FLAT)
+    assert main(["--explain", str(tmp_path / "missing.py")]) == 2
+    assert main(["--explain", f"{p}::nosuch"]) == 2
+    assert capsys.readouterr().err.startswith("cococo:")
 
 
 # --- Option A: named nested functions are scored as their own units ---
