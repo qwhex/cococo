@@ -9,7 +9,26 @@ on:
       - "v*"
 
 jobs:
+  # The full CI gate (same matrix as ci.yml) must be green before anything is
+  # built or published — a tag can no longer ship what CI would reject.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  # The tag must match the packaged version, or the run stops before building —
+  # otherwise tag vX.Y.Z on a stale __version__ publishes the wrong artifact
+  # under the right release name.
+  version-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Tag matches __version__
+        run: |
+          version=$(python -c "import cognitive_complexity as c; print(c.__version__)")
+          [ "$GITHUB_REF_NAME" = "v$version" ] || {
+            echo "tag $GITHUB_REF_NAME != package version $version"; exit 1; }
+
   build:
+    needs: [ci, version-check]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -51,6 +70,7 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           awk "/^## \[$version\]/{f=1;next} /^## \[/{f=0} f" CHANGELOG.md > notes.md
+          [ -s notes.md ] || { echo "no '## [$version]' section in CHANGELOG.md"; exit 1; }
           echo "Release notes for $version:"; cat notes.md
       - name: Create GitHub Release
         env:

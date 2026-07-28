@@ -3,6 +3,9 @@ name: CI
 on:
   push:
   pull_request:
+  # Lets the release workflow run this same gate as a required job before
+  # publishing (see release.yml).
+  workflow_call:
 
 jobs:
   check:

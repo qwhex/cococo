@@ -1,6 +1,9 @@
 # Lint + type-check — same toolchain as the parent cosmetix data_pipeline.
-ruff>=0.15
-mypy>=1.11
+# Pinned exactly: CI installs these fresh on every run, and an unpinned ruff
+# turned CI red with no repo change (0.16.0 began formatting Markdown code
+# blocks). Bump deliberately, running `just check` with the new pin.
+ruff==0.15.16
+mypy==2.1.0
 
 # Test suite
 pytest>=8.0
